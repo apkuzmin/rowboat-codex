@@ -27,6 +27,8 @@ import { listOnboardingModels } from '@x/core/dist/models/models-dev.js';
 import { testModelConnection } from '@x/core/dist/models/models.js';
 import { isSignedIn } from '@x/core/dist/account/account.js';
 import { listGatewayModels } from '@x/core/dist/models/gateway.js';
+import { listCodexModels } from '@x/core/dist/models/codex.js';
+import { getActiveProviderMode } from '@x/core/dist/models/active-provider.js';
 import type { IModelConfigRepo } from '@x/core/dist/models/repo.js';
 import type { IOAuthRepo } from '@x/core/dist/auth/repo.js';
 import { IGranolaConfigRepo } from '@x/core/dist/knowledge/granola/repo.js';
@@ -333,7 +335,7 @@ function emitServiceEvent(event: z.infer<typeof ServiceEvent>): void {
   }
 }
 
-export function emitOAuthEvent(event: { provider: string; success: boolean; error?: string }): void {
+export function emitOAuthEvent(event: { provider: string; success: boolean; error?: string; email?: string; planType?: string }): void {
   const windows = BrowserWindow.getAllWindows();
   for (const win of windows) {
     if (!win.isDestroyed() && win.webContents) {
@@ -458,8 +460,12 @@ export function setupIpcHandlers() {
       return { success: true };
     },
     'models:list': async () => {
-      if (await isSignedIn()) {
+      const activeProviderMode = await getActiveProviderMode();
+      if (activeProviderMode === 'rowboat') {
         return await listGatewayModels();
+      }
+      if (activeProviderMode === 'chatgpt-codex') {
+        return await listCodexModels();
       }
       return await listOnboardingModels();
     },
@@ -475,7 +481,7 @@ export function setupIpcHandlers() {
       const credentials = args.clientId && args.clientSecret
         ? { clientId: args.clientId.trim(), clientSecret: args.clientSecret.trim() }
         : undefined;
-      return await connectProvider(args.provider, credentials);
+      return await connectProvider(args.provider, credentials, args.mode);
     },
     'oauth:disconnect': async (_event, args) => {
       return await disconnectProvider(args.provider);

@@ -10,7 +10,7 @@ export interface ProviderState {
 
 export type Step = 0 | 1 | 2 | 3
 
-export type OnboardingPath = 'rowboat' | 'byok' | null
+export type OnboardingPath = 'rowboat' | 'chatgpt-codex' | 'byok' | null
 
 export type LlmProviderFlavor = "openai" | "anthropic" | "google" | "openrouter" | "aigateway" | "ollama" | "openai-compatible"
 
@@ -394,7 +394,7 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
   }, [startGoogleCalendarConnect])
 
   // New step flow:
-  // Rowboat path: 0 (welcome) → 2 (connect) → 3 (done)
+  // Account-backed path: 0 (welcome) → 2 (connect) → 3 (done)
   // BYOK path: 0 (welcome) → 1 (llm setup) → 2 (connect) → 3 (done)
   const handleNext = useCallback(() => {
     if (currentStep === 0) {
@@ -415,7 +415,7 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
       setCurrentStep(0)
       setOnboardingPath(null)
     } else if (currentStep === 2) {
-      if (onboardingPath === 'rowboat') {
+      if (onboardingPath === 'rowboat' || onboardingPath === 'chatgpt-codex') {
         setCurrentStep(0)
       } else {
         setCurrentStep(1)
@@ -531,10 +531,10 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
 
   // Auto-advance from Rowboat sign-in step when OAuth completes
   useEffect(() => {
-    if (onboardingPath !== 'rowboat' || currentStep !== 0) return
+    if ((onboardingPath !== 'rowboat' && onboardingPath !== 'chatgpt-codex') || currentStep !== 0) return
 
     const cleanup = window.ipc.on('oauth:didConnect', async (event) => {
-      if (event.provider === 'rowboat' && event.success) {
+      if (event.provider === onboardingPath && event.success) {
         // Re-check composio flags now that the account is connected
         try {
           const [googleResult, calendarResult] = await Promise.all([
@@ -576,14 +576,23 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
     return cleanup
   }, [])
 
-  const startConnect = useCallback(async (provider: string, credentials?: { clientId: string; clientSecret: string }) => {
+  const startConnect = useCallback(async (
+    provider: string,
+    credentials?: { clientId: string; clientSecret: string },
+    mode: 'browser' | 'device' = 'browser',
+  ) => {
     setProviderStates(prev => ({
       ...prev,
       [provider]: { ...prev[provider], isConnecting: true }
     }))
 
     try {
-      const result = await window.ipc.invoke('oauth:connect', { provider, clientId: credentials?.clientId, clientSecret: credentials?.clientSecret })
+      const result = await window.ipc.invoke('oauth:connect', {
+        provider,
+        clientId: credentials?.clientId,
+        clientSecret: credentials?.clientSecret,
+        mode,
+      })
 
       if (!result.success) {
         toast.error(result.error || `Failed to connect to ${provider}`)
@@ -591,6 +600,11 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
           ...prev,
           [provider]: { ...prev[provider], isConnecting: false }
         }))
+      } else if (mode === 'device' && result.deviceCode) {
+        toast.success('Enter the device code in ChatGPT', {
+          description: `${result.deviceCode}${result.verificationUrl ? ` at ${result.verificationUrl}` : ''}`,
+          duration: 12000,
+        })
       }
     } catch (error) {
       console.error('Failed to connect:', error)
@@ -610,6 +624,10 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
     }
 
     await startConnect(provider)
+  }, [startConnect])
+
+  const startDeviceConnect = useCallback(async (provider: string) => {
+    await startConnect(provider, undefined, 'device')
   }, [startConnect])
 
   const handleGoogleClientIdSubmit = useCallback((clientId: string, clientSecret: string) => {
@@ -662,6 +680,7 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
     handleConnect,
     handleGoogleClientIdSubmit,
     startConnect,
+    startDeviceConnect,
 
     // Granola state
     granolaEnabled,

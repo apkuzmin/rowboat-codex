@@ -10,6 +10,15 @@ export interface ProviderState {
 
 export interface ProviderStatus {
   error?: string
+  email?: string | null
+  planType?: string | null
+}
+
+const providerDisplayName = (provider: string) => {
+  if (provider === 'rowboat') return 'Rowboat'
+  if (provider === 'fireflies-ai') return 'Fireflies'
+  if (provider === 'chatgpt-codex') return 'ChatGPT / Codex'
+  return provider.charAt(0).toUpperCase() + provider.slice(1)
 }
 
 export function useConnectors(active: boolean) {
@@ -318,25 +327,48 @@ export function useConnectors(active: boolean) {
   }, [startGmailConnect])
 
   // OAuth connect/disconnect
-  const startConnect = useCallback(async (provider: string, credentials?: { clientId: string; clientSecret: string }) => {
+  const startConnect = useCallback(async (
+    provider: string,
+    credentials?: { clientId: string; clientSecret: string },
+    mode: 'browser' | 'device' = 'browser',
+  ) => {
     setProviderStates(prev => ({
       ...prev,
       [provider]: { ...prev[provider], isConnecting: true }
     }))
 
     try {
-      const result = await window.ipc.invoke('oauth:connect', { provider, clientId: credentials?.clientId, clientSecret: credentials?.clientSecret })
+      const result = await window.ipc.invoke('oauth:connect', {
+        provider,
+        clientId: credentials?.clientId,
+        clientSecret: credentials?.clientSecret,
+        mode,
+      })
 
       if (!result.success) {
-        toast.error(result.error || (provider === 'rowboat' ? 'Failed to log in to Rowboat' : `Failed to connect to ${provider}`))
+        const displayName = providerDisplayName(provider)
+        toast.error(
+          result.error
+            || (provider === 'rowboat'
+              ? 'Failed to log in to Rowboat'
+              : provider === 'chatgpt-codex'
+                ? `Failed to connect to ${displayName}`
+                : `Failed to connect to ${provider}`),
+        )
         setProviderStates(prev => ({
           ...prev,
           [provider]: { ...prev[provider], isConnecting: false }
         }))
+      } else if (mode === 'device' && result.deviceCode) {
+        toast.success('Enter the device code in ChatGPT', {
+          description: `${result.deviceCode}${result.verificationUrl ? ` at ${result.verificationUrl}` : ''}`,
+          duration: 12000,
+        })
       }
     } catch (error) {
       console.error('Failed to connect:', error)
-      toast.error(provider === 'rowboat' ? 'Failed to log in to Rowboat' : `Failed to connect to ${provider}`)
+      const displayName = providerDisplayName(provider)
+      toast.error(provider === 'rowboat' ? 'Failed to log in to Rowboat' : `Failed to connect to ${displayName}`)
       setProviderStates(prev => ({
         ...prev,
         [provider]: { ...prev[provider], isConnecting: false }
@@ -352,6 +384,10 @@ export function useConnectors(active: boolean) {
     }
 
     await startConnect(provider)
+  }, [startConnect])
+
+  const startDeviceConnect = useCallback(async (provider: string) => {
+    await startConnect(provider, undefined, 'device')
   }, [startConnect])
 
   const handleGoogleClientIdSubmit = useCallback((clientId: string, clientSecret: string) => {
@@ -430,8 +466,10 @@ export function useConnectors(active: boolean) {
           isLoading: false,
           isConnecting: false,
         }
-        if (providerConfig?.error) {
-          statusMap[provider] = { error: providerConfig.error }
+        statusMap[provider] = {
+          error: providerConfig?.error ?? undefined,
+          email: providerConfig?.email ?? null,
+          planType: providerConfig?.planType ?? null,
         }
       }
 
@@ -473,9 +511,16 @@ export function useConnectors(active: boolean) {
       }))
 
       if (success) {
-        const displayName = provider === 'fireflies-ai' ? 'Fireflies' : provider.charAt(0).toUpperCase() + provider.slice(1)
+        const displayName = providerDisplayName(provider)
         if (provider === 'rowboat') {
           toast.success('Logged in to Rowboat')
+        } else if (provider === 'chatgpt-codex') {
+          toast.success(`Connected to ${displayName}`, {
+            description: event.planType
+              ? `${event.planType} plan detected${event.email ? ` for ${event.email}` : ''}.`
+              : (event.email ? `Connected as ${event.email}.` : 'Your ChatGPT account is ready to use.'),
+            duration: 8000,
+          })
         } else if (provider === 'google' || provider === 'fireflies-ai') {
           toast.success(`Connected to ${displayName}`, {
             description: 'Syncing your data in the background. This may take a few minutes before changes appear.',
@@ -556,6 +601,7 @@ export function useConnectors(active: boolean) {
     handleConnect,
     handleDisconnect,
     startConnect,
+    startDeviceConnect,
 
     // Google credentials modal
     googleClientIdOpen,

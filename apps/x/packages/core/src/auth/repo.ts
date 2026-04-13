@@ -4,11 +4,21 @@ import path from 'path';
 import { OAuthTokens } from './types.js';
 import z from 'zod';
 
+const ProviderMetadataSchema = z.object({
+  idToken: z.string().nullable().optional(),
+  accountId: z.string().nullable().optional(),
+  email: z.string().nullable().optional(),
+  expire: z.string().nullable().optional(),
+  lastRefresh: z.string().nullable().optional(),
+  planType: z.string().nullable().optional(),
+}).passthrough();
+
 const ProviderConnectionSchema = z.object({
   tokens: OAuthTokens.nullable().optional(),
   clientId: z.string().nullable().optional(),
   clientSecret: z.string().nullable().optional(),
   error: z.string().nullable().optional(),
+  metadata: ProviderMetadataSchema.nullable().optional(),
 });
 
 const OAuthConfigSchema = z.object({
@@ -20,12 +30,14 @@ const ClientFacingConfigSchema = z.record(z.string(), z.object({
   connected: z.boolean(),
   error: z.string().nullable().optional(),
   clientId: z.string().nullable().optional(),
+  email: z.string().nullable().optional(),
+  planType: z.string().nullable().optional(),
 }));
 
 const LegacyOauthConfigSchema = z.record(z.string(), OAuthTokens);
 
 const DEFAULT_CONFIG: z.infer<typeof OAuthConfigSchema> = {
-  version: 2,
+  version: 3,
   providers: {},
 };
 
@@ -61,7 +73,7 @@ export class FSOAuthRepo implements IOAuthRepo {
     // otherwise attempt to parse as legacy schema
     const legacyConfig = LegacyOauthConfigSchema.parse(payload);
     const updatedConfig: z.infer<typeof OAuthConfigSchema> = {
-      version: 2,
+      version: 3,
       providers: {},
     };
     for (const [provider, tokens] of Object.entries(legacyConfig)) {
@@ -114,6 +126,8 @@ export class FSOAuthRepo implements IOAuthRepo {
         connected: !!providerConfig.tokens,
         error: providerConfig.error,
         clientId: providerConfig.clientId ?? null,
+        email: providerConfig.metadata?.email ?? null,
+        planType: providerConfig.metadata?.planType ?? null,
       };
     }
     return ClientFacingConfigSchema.parse(clientFacingConfig);

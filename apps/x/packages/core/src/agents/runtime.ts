@@ -14,9 +14,7 @@ import { buildCopilotAgent } from "../application/assistant/agent.js";
 import { isBlocked, extractCommandNames } from "../application/lib/command-executor.js";
 import container from "../di/container.js";
 import { IModelConfigRepo } from "../models/repo.js";
-import { createProvider } from "../models/models.js";
-import { isSignedIn } from "../account/account.js";
-import { getGatewayProvider } from "../models/gateway.js";
+import { resolveActiveProvider } from "../models/active-provider.js";
 import { IAgentsRepo } from "./repo.js";
 import { IMonotonicallyIncreasingIdGenerator } from "../application/lib/id-gen.js";
 import { IBus } from "../application/lib/bus.js";
@@ -851,16 +849,18 @@ export async function* streamAgent({
     const tools = await buildTools(agent);
 
     // set up provider + model
-    const signedIn = await isSignedIn();
-    const provider = signedIn
-        ? await getGatewayProvider()
-        : createProvider(modelConfig.provider);
+    const activeProvider = await resolveActiveProvider(modelConfig.provider);
+    const provider = activeProvider.provider;
     const knowledgeGraphAgents = ["note_creation", "email-draft", "meeting-prep", "labeling_agent", "note_tagging_agent", "agent_notes_agent"];
     const isKgAgent = knowledgeGraphAgents.includes(state.agentName!);
     const isInlineTaskAgent = state.agentName === "inline_task_agent";
-    const defaultModel = signedIn ? "gpt-5.4" : modelConfig.model;
-    const defaultKgModel = signedIn ? "anthropic/claude-haiku-4.5" : defaultModel;
-    const defaultInlineTaskModel = signedIn ? "anthropic/claude-sonnet-4.6" : defaultModel;
+    const defaultModel = activeProvider.mode === 'byok' ? modelConfig.model : activeProvider.defaultModel;
+    const defaultKgModel = activeProvider.mode === 'byok'
+        ? defaultModel
+        : activeProvider.defaultKnowledgeGraphModel;
+    const defaultInlineTaskModel = activeProvider.mode === 'byok'
+        ? defaultModel
+        : activeProvider.defaultModel;
     const modelId = isInlineTaskAgent
         ? defaultInlineTaskModel
         : (isKgAgent && modelConfig.knowledgeGraphModel)

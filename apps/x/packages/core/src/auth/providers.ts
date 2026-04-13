@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { getRowboatConfig } from '../config/rowboat.js';
+import { isChatGptCodexEnabled, CHATGPT_CODEX_PROVIDER } from './codex.js';
 
 /**
  * Discovery configuration - how to get OAuth endpoints
@@ -117,6 +118,9 @@ export async function getProviderConfig(providerName: string): Promise<ProviderC
  * Get list of all configured OAuth providers
  */
 export function getAvailableProviders(): string[] {
-  return Object.keys(providerConfigs);
+  const providers = Object.keys(providerConfigs);
+  if (isChatGptCodexEnabled()) {
+    providers.push(CHATGPT_CODEX_PROVIDER);
+  }
+  return providers;
 }
-
