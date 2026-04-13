@@ -1,7 +1,7 @@
 import { createServer, Server } from 'http';
 import { URL } from 'url';
 
-const OAUTH_CALLBACK_PATH = '/oauth/callback';
+const DEFAULT_CALLBACK_PATH = '/oauth/callback';
 const DEFAULT_PORT = 8080;
 
 /** Escape HTML special characters to prevent XSS */
@@ -26,9 +26,13 @@ export interface AuthServerResult {
  */
 export function createAuthServer(
   port: number = DEFAULT_PORT,
-  onCallback: (callbackUrl: URL) => void | Promise<void>
+  onCallback: (callbackUrl: URL) => void | Promise<void>,
+  options?: {
+    callbackPath?: string;
+  },
 ): Promise<AuthServerResult> {
   return new Promise((resolve, reject) => {
+    const callbackPath = options?.callbackPath ?? DEFAULT_CALLBACK_PATH;
     const server = createServer((req, res) => {
       if (!req.url) {
         res.writeHead(400);
@@ -38,7 +42,7 @@ export function createAuthServer(
 
       const url = new URL(req.url, `http://localhost:${port}`);
       
-      if (url.pathname === OAUTH_CALLBACK_PATH) {
+      if (url.pathname === callbackPath) {
         const error = url.searchParams.get('error');
 
         if (error) {
@@ -65,7 +69,9 @@ export function createAuthServer(
         }
 
         // Handle callback - pass full URL so params like iss (OpenID Connect) are preserved for token exchange
-        onCallback(url);
+        void Promise.resolve(onCallback(url)).catch((error) => {
+          console.error('[OAuth] callback handler failed:', error);
+        });
 
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(`
@@ -104,4 +110,3 @@ export function createAuthServer(
     });
   });
 }
-

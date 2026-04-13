@@ -10,9 +10,26 @@ import { IClientRegistrationRepo } from '@x/core/dist/auth/client-repo.js';
 import { triggerSync as triggerGmailSync } from '@x/core/dist/knowledge/sync_gmail.js';
 import { triggerSync as triggerCalendarSync } from '@x/core/dist/knowledge/sync_calendar.js';
 import { triggerSync as triggerFirefliesSync } from '@x/core/dist/knowledge/sync_fireflies.js';
+import type { IModelConfigRepo } from '@x/core/dist/models/repo.js';
+import {
+  buildCodexAuthorizationUrl,
+  CHATGPT_CODEX_PROVIDER,
+  CHATGPT_CODEX_REDIRECT_URI,
+  exchangeCodexAuthorizationCode,
+  generateCodeChallenge,
+  generateCodeVerifier,
+  generateCodexState,
+  getCodexAccessToken,
+  isChatGptCodexEnabled,
+  pollCodexDeviceAuthorization,
+  requestCodexDeviceCode,
+} from '@x/core/dist/auth/codex.js';
+import { CODEX_DEFAULT_MODEL, CODEX_LIGHTWEIGHT_MODEL } from '@x/core/dist/models/codex.js';
 import { emitOAuthEvent } from './ipc.js';
 
 const REDIRECT_URI = 'http://localhost:8080/oauth/callback';
+const CODEX_CALLBACK_PATH = '/auth/callback';
+const CODEX_CALLBACK_PORT = 1455;
 
 /** Top-level openid-client messages that often wrap a more specific cause. */
 const OPAQUE_OAUTH_TOP_MESSAGES = new Set(['invalid response encountered']);
@@ -84,10 +101,13 @@ function cancelActiveFlow(reason: string = 'cancelled'): void {
 
   // Only emit event for user-visible cancellations
   if (reason !== 'new_flow_started') {
+    const message = reason === 'timed_out'
+      ? 'Authentication timed out before the browser callback completed.'
+      : `OAuth flow ${reason}`;
     emitOAuthEvent({
       provider: activeFlow.provider,
       success: false,
-      error: `OAuth flow ${reason}`
+      error: message,
     });
   }
 
@@ -98,14 +118,210 @@ function cancelActiveFlow(reason: string = 'cancelled'): void {
  * Get OAuth repository from DI container
  */
 function getOAuthRepo(): IOAuthRepo {
-  return container.resolve<IOAuthRepo>('oauthRepo');
+  return container.resolve('oauthRepo') as IOAuthRepo;
+}
+
+async function ensureCodexModelDefaults(): Promise<void> {
+  const modelConfigRepo = container.resolve('modelConfigRepo') as IModelConfigRepo;
+  const config = await modelConfigRepo.getConfig();
+  const validModels = new Set([CODEX_DEFAULT_MODEL, CODEX_LIGHTWEIGHT_MODEL]);
+  const nextConfig = {
+    ...config,
+    model: validModels.has(config.model) ? config.model : CODEX_DEFAULT_MODEL,
+    knowledgeGraphModel: validModels.has(config.knowledgeGraphModel ?? '')
+      ? config.knowledgeGraphModel
+      : CODEX_LIGHTWEIGHT_MODEL,
+    meetingNotesModel: validModels.has(config.meetingNotesModel ?? '')
+      ? config.meetingNotesModel
+      : CODEX_LIGHTWEIGHT_MODEL,
+  };
+  await modelConfigRepo.setConfig(nextConfig);
+}
+
+async function persistCodexConnection(result: {
+  tokens: {
+    access_token: string;
+    refresh_token: string | null;
+    expires_at: number;
+    token_type?: 'Bearer';
+    scopes?: string[];
+  };
+  metadata: {
+    email?: string | null;
+    accountId?: string | null;
+    planType?: string | null;
+    idToken?: string | null;
+    expire?: string | null;
+    lastRefresh?: string | null;
+  };
+}): Promise<void> {
+  const oauthRepo = getOAuthRepo();
+  await oauthRepo.upsert(CHATGPT_CODEX_PROVIDER, {
+    tokens: result.tokens,
+    metadata: result.metadata,
+    error: null,
+  });
+}
+
+function codexErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : 'Unknown error';
+  if (message.includes('already in use')) {
+    return 'Codex login could not start because local callback port 1455 is already in use.';
+  }
+  if (message.includes('timed out')) {
+    return 'Codex login timed out before authentication completed.';
+  }
+  if (message.toLowerCase().includes('state mismatch')) {
+    return 'Codex login failed because the callback state did not match the active sign-in attempt.';
+  }
+  return message;
+}
+
+async function connectCodexBrowserProvider(): Promise<{ success: boolean; error?: string; deviceCode?: string; verificationUrl?: string }> {
+  if (!isChatGptCodexEnabled()) {
+    return { success: false, error: 'ChatGPT / Codex provider is disabled.' };
+  }
+
+  try {
+    cancelActiveFlow('new_flow_started');
+
+    const state = generateCodexState();
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = generateCodeChallenge(codeVerifier);
+    const authUrl = buildCodexAuthorizationUrl(state, codeChallenge);
+
+    let callbackHandled = false;
+    const { server } = await createAuthServer(
+      CODEX_CALLBACK_PORT,
+      async (callbackUrl) => {
+        if (callbackHandled) return;
+        callbackHandled = true;
+
+        const receivedState = callbackUrl.searchParams.get('state');
+        const error = callbackUrl.searchParams.get('error');
+        if (error) {
+          const errorMessage = callbackUrl.searchParams.get('error_description') || error;
+          emitOAuthEvent({ provider: CHATGPT_CODEX_PROVIDER, success: false, error: errorMessage });
+          return;
+        }
+        if (!receivedState) {
+          emitOAuthEvent({
+            provider: CHATGPT_CODEX_PROVIDER,
+            success: false,
+            error: 'Codex callback missing state parameter.',
+          });
+          return;
+        }
+        if (receivedState !== state) {
+          emitOAuthEvent({
+            provider: CHATGPT_CODEX_PROVIDER,
+            success: false,
+            error: 'Codex callback state mismatch.',
+          });
+          return;
+        }
+
+        const code = callbackUrl.searchParams.get('code');
+        if (!code) {
+          emitOAuthEvent({
+            provider: CHATGPT_CODEX_PROVIDER,
+            success: false,
+            error: 'Codex callback missing authorization code.',
+          });
+          return;
+        }
+
+        try {
+          const tokens = await exchangeCodexAuthorizationCode(code, codeVerifier, CHATGPT_CODEX_REDIRECT_URI);
+          await persistCodexConnection(tokens);
+          await ensureCodexModelDefaults();
+          emitOAuthEvent({
+            provider: CHATGPT_CODEX_PROVIDER,
+            success: true,
+            email: tokens.metadata.email ?? undefined,
+            planType: tokens.metadata.planType ?? undefined,
+          });
+        } catch (exchangeError) {
+          const errorMessage = codexErrorMessage(exchangeError);
+          await getOAuthRepo().upsert(CHATGPT_CODEX_PROVIDER, { error: errorMessage });
+          emitOAuthEvent({ provider: CHATGPT_CODEX_PROVIDER, success: false, error: errorMessage });
+        } finally {
+          if (activeFlow?.state === state) {
+            clearTimeout(activeFlow.cleanupTimeout);
+            activeFlow.server.close();
+            activeFlow = null;
+          }
+        }
+      },
+      { callbackPath: CODEX_CALLBACK_PATH },
+    );
+
+    const cleanupTimeout = setTimeout(() => {
+      if (activeFlow?.state === state) {
+        cancelActiveFlow('timed_out');
+      }
+    }, 5 * 60 * 1000);
+
+    activeFlow = {
+      provider: CHATGPT_CODEX_PROVIDER,
+      state,
+      server,
+      cleanupTimeout,
+    };
+
+    shell.openExternal(authUrl.toString());
+    return { success: true };
+  } catch (error) {
+    const errorMessage = codexErrorMessage(error);
+    console.error('Codex browser login failed:', error);
+    return { success: false, error: errorMessage };
+  }
+}
+
+async function connectCodexDeviceProvider(): Promise<{ success: boolean; error?: string; deviceCode?: string; verificationUrl?: string }> {
+  if (!isChatGptCodexEnabled()) {
+    return { success: false, error: 'ChatGPT / Codex provider is disabled.' };
+  }
+
+  try {
+    const { deviceAuthId, userCode, intervalSeconds, verificationUrl } = await requestCodexDeviceCode();
+    shell.openExternal(verificationUrl);
+
+    void (async () => {
+      try {
+        const tokens = await pollCodexDeviceAuthorization(deviceAuthId, userCode, intervalSeconds);
+        await persistCodexConnection(tokens);
+        await ensureCodexModelDefaults();
+        emitOAuthEvent({
+          provider: CHATGPT_CODEX_PROVIDER,
+          success: true,
+          email: tokens.metadata.email ?? undefined,
+          planType: tokens.metadata.planType ?? undefined,
+        });
+      } catch (deviceError) {
+        const errorMessage = codexErrorMessage(deviceError);
+        await getOAuthRepo().upsert(CHATGPT_CODEX_PROVIDER, { error: errorMessage });
+        emitOAuthEvent({ provider: CHATGPT_CODEX_PROVIDER, success: false, error: errorMessage });
+      }
+    })();
+
+    return {
+      success: true,
+      deviceCode: userCode,
+      verificationUrl,
+    };
+  } catch (error) {
+    const errorMessage = codexErrorMessage(error);
+    console.error('Codex device login failed:', error);
+    return { success: false, error: errorMessage };
+  }
 }
 
 /**
  * Get client registration repository from DI container
  */
 function getClientRegistrationRepo(): IClientRegistrationRepo {
-  return container.resolve<IClientRegistrationRepo>('clientRegistrationRepo');
+  return container.resolve('clientRegistrationRepo') as IClientRegistrationRepo;
 }
 
 /**
@@ -187,9 +403,19 @@ async function getProviderConfiguration(provider: string, credentialsOverride?: 
 /**
  * Initiate OAuth flow for a provider
  */
-export async function connectProvider(provider: string, credentials?: { clientId: string; clientSecret: string }): Promise<{ success: boolean; error?: string }> {
+export async function connectProvider(
+  provider: string,
+  credentials?: { clientId: string; clientSecret: string },
+  mode: 'browser' | 'device' = 'browser',
+): Promise<{ success: boolean; error?: string; deviceCode?: string; verificationUrl?: string }> {
   try {
     console.log(`[OAuth] Starting connection flow for ${provider}...`);
+
+    if (provider === CHATGPT_CODEX_PROVIDER) {
+      return mode === 'device'
+        ? await connectCodexDeviceProvider()
+        : await connectCodexBrowserProvider();
+    }
 
     // Cancel any existing flow before starting a new one
     cancelActiveFlow('new_flow_started');
@@ -350,6 +576,10 @@ export async function disconnectProvider(provider: string): Promise<{ success: b
  */
 export async function getAccessToken(provider: string): Promise<string | null> {
   try {
+    if (provider === CHATGPT_CODEX_PROVIDER) {
+      return await getCodexAccessToken();
+    }
+
     const oauthRepo = getOAuthRepo();
 
     let { tokens } = await oauthRepo.read(provider);

@@ -17,10 +17,9 @@ import { executeAction as executeComposioAction, isConfigured as isComposioConfi
 import { CURATED_TOOLKITS, CURATED_TOOLKIT_SLUGS } from "@x/shared/dist/composio.js";
 import type { ToolContext } from "./exec-tool.js";
 import { generateText } from "ai";
-import { createProvider } from "../../models/models.js";
 import { IModelConfigRepo } from "../../models/repo.js";
 import { isSignedIn } from "../../account/account.js";
-import { getGatewayProvider } from "../../models/gateway.js";
+import { resolveActiveProvider } from "../../models/active-provider.js";
 import { getAccessToken } from "../../auth/tokens.js";
 import { API_URL } from "../../config/env.js";
 // Parser libraries are loaded dynamically inside parseFile.execute()
@@ -639,9 +638,7 @@ export const BuiltinTools: z.infer<typeof BuiltinToolsSchema> = {
                 // Resolve model config from DI container
                 const modelConfigRepo = container.resolve<IModelConfigRepo>('modelConfigRepo');
                 const modelConfig = await modelConfigRepo.getConfig();
-                const provider = await isSignedIn()
-                    ? await getGatewayProvider()
-                    : createProvider(modelConfig.provider);
+                const provider = (await resolveActiveProvider(modelConfig.provider)).provider;
                 const model = provider.languageModel(modelConfig.model);
 
                 const userPrompt = prompt || 'Convert this file to well-structured markdown.';

@@ -7,7 +7,7 @@ import { createRun, createMessage, fetchRun } from '../runs/runs.js';
 import { bus } from '../runs/bus.js';
 import container from '../di/container.js';
 import type { IModelConfigRepo } from '../models/repo.js';
-import { createProvider } from '../models/models.js';
+import { resolveActiveProvider } from '../models/active-provider.js';
 import { inlineTask } from '@x/shared';
 
 const SYNC_INTERVAL_MS = 15 * 1000; // 15 seconds
@@ -653,7 +653,7 @@ export async function processRowboatInstruction(
 export async function classifySchedule(instruction: string): Promise<InlineTaskSchedule | null> {
     const repo = container.resolve<IModelConfigRepo>('modelConfigRepo');
     const config = await repo.getConfig();
-    const provider = createProvider(config.provider);
+    const provider = (await resolveActiveProvider(config.provider)).provider;
     const model = provider.languageModel(config.model);
 
     const now = new Date();

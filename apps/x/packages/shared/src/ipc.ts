@@ -213,6 +213,8 @@ const ipcSchemas = {
     res: z.object({
       success: z.boolean(),
       error: z.string().optional(),
+      deviceCode: z.string().optional(),
+      verificationUrl: z.string().optional(),
     }),
   },
   'models:saveConfig': {
@@ -226,10 +228,13 @@ const ipcSchemas = {
       provider: z.string(),
       clientId: z.string().optional(),
       clientSecret: z.string().optional(),
+      mode: z.enum(['browser', 'device']).optional(),
     }),
     res: z.object({
       success: z.boolean(),
       error: z.string().optional(),
+      deviceCode: z.string().optional(),
+      verificationUrl: z.string().optional(),
     }),
   },
   'oauth:disconnect': {
@@ -254,6 +259,8 @@ const ipcSchemas = {
         error: z.string().nullable().optional(),
         userId: z.string().optional(),
         clientId: z.string().nullable().optional(),
+        email: z.string().nullable().optional(),
+        planType: z.string().nullable().optional(),
       })),
     }),
   },
@@ -271,6 +278,8 @@ const ipcSchemas = {
       success: z.boolean(),
       error: z.string().optional(),
       userId: z.string().optional(),
+      email: z.string().optional(),
+      planType: z.string().optional(),
     }),
     res: z.null(),
   },

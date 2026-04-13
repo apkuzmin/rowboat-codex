@@ -9,7 +9,9 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { LlmModelConfig, LlmProvider } from "@x/shared/dist/models.js";
 import z from "zod";
 import { isSignedIn } from "../account/account.js";
+import { isCodexConnected } from "../auth/codex.js";
 import { getGatewayProvider } from "./gateway.js";
+import { getCodexProvider } from "./codex.js";
 
 export const Provider = LlmProvider;
 export const ModelConfig = LlmModelConfig;
@@ -82,7 +84,9 @@ export async function testModelConnection(
     try {
         const provider = await isSignedIn()
             ? await getGatewayProvider()
-            : createProvider(providerConfig);
+            : await isCodexConnected()
+                ? await getCodexProvider()
+                : createProvider(providerConfig);
         const languageModel = provider.languageModel(model);
         await generateText({
             model: languageModel,
