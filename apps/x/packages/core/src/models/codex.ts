@@ -1,7 +1,7 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { ProviderV2 } from '@ai-sdk/provider';
 import z from 'zod';
-import { getCodexAuthRecord } from '../auth/codex.js';
+import { buildCodexHeaders, CHATGPT_CODEX_ORIGINATOR, getCodexAuthRecord } from '../auth/codex.js';
 import { ModelConfig } from './models.js';
 
 export const CODEX_PROVIDER_ID = 'chatgpt-codex';
@@ -121,11 +121,8 @@ function buildCodexDiscoveryHeaders(auth: Awaited<ReturnType<typeof getCodexAuth
   }
 
   return {
-    Authorization: `Bearer ${auth.tokens.access_token}`,
-    Accept: 'application/json',
-    Originator: 'codex-tui',
     'User-Agent': CODEX_USER_AGENT,
-    ...(auth.metadata.accountId ? { 'Chatgpt-Account-Id': auth.metadata.accountId } : {}),
+    ...buildCodexHeaders(auth),
   };
 }
 
@@ -321,7 +318,7 @@ export async function getCodexProvider(): Promise<ProviderV2> {
     apiKey: auth.tokens.access_token,
     baseURL: CODEX_BASE_URL,
     headers: {
-      Originator: 'codex-tui',
+      Originator: CHATGPT_CODEX_ORIGINATOR,
       'User-Agent': CODEX_USER_AGENT,
       ...(auth.metadata.accountId ? { 'Chatgpt-Account-Id': auth.metadata.accountId } : {}),
     },
