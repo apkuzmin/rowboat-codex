@@ -1,13 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
-import { generateText } from 'ai';
 import { WorkDir } from '../config/config.js';
 import { createRun, createMessage, fetchRun } from '../runs/runs.js';
 import { bus } from '../runs/bus.js';
 import container from '../di/container.js';
 import type { IModelConfigRepo } from '../models/repo.js';
 import { resolveActiveProvider } from '../models/active-provider.js';
+import { generateTextForProvider } from '../models/text-generation.js';
 import { inlineTask } from '@x/shared';
 
 const SYNC_INTERVAL_MS = 15 * 1000; // 15 seconds
@@ -653,7 +653,8 @@ export async function processRowboatInstruction(
 export async function classifySchedule(instruction: string): Promise<InlineTaskSchedule | null> {
     const repo = container.resolve<IModelConfigRepo>('modelConfigRepo');
     const config = await repo.getConfig();
-    const provider = (await resolveActiveProvider(config)).provider;
+    const activeProvider = await resolveActiveProvider(config);
+    const provider = activeProvider.provider;
     const model = provider.languageModel(config.model);
 
     const now = new Date();
@@ -692,7 +693,7 @@ Default end time (local): ${localEnd}
 Respond with ONLY valid JSON: either a schedule object or null. No other text.`;
 
     try {
-        const result = await generateText({
+        const result = await generateTextForProvider(activeProvider.mode, {
             model,
             system: systemPrompt,
             prompt: instruction,

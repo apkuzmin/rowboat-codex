@@ -18,10 +18,10 @@ import { composioAccountsRepo } from "../../composio/repo.js";
 import { executeAction as executeComposioAction, isConfigured as isComposioConfigured, searchTools as searchComposioTools } from "../../composio/client.js";
 import { CURATED_TOOLKITS, CURATED_TOOLKIT_SLUGS } from "@x/shared/dist/composio.js";
 import type { ToolContext } from "./exec-tool.js";
-import { generateText } from "ai";
 import { IModelConfigRepo } from "../../models/repo.js";
 import { isSignedIn } from "../../account/account.js";
 import { resolveActiveProvider } from "../../models/active-provider.js";
+import { generateTextForProvider } from "../../models/text-generation.js";
 import { getAccessToken } from "../../auth/tokens.js";
 import { API_URL } from "../../config/env.js";
 // Parser libraries are loaded dynamically inside parseFile.execute()
@@ -745,12 +745,13 @@ export const BuiltinTools: z.infer<typeof BuiltinToolsSchema> = {
                 // Resolve model config from DI container
                 const modelConfigRepo = container.resolve<IModelConfigRepo>('modelConfigRepo');
                 const modelConfig = await modelConfigRepo.getConfig();
-                const provider = (await resolveActiveProvider(modelConfig)).provider;
+                const activeProvider = await resolveActiveProvider(modelConfig);
+                const provider = activeProvider.provider;
                 const model = provider.languageModel(modelConfig.model);
 
                 const userPrompt = prompt || 'Convert this file to well-structured markdown.';
 
-                const response = await generateText({
+                const response = await generateTextForProvider(activeProvider.mode, {
                     model,
                     messages: [
                         {

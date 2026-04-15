@@ -129,6 +129,63 @@ function buildCodexDiscoveryHeaders(auth: Awaited<ReturnType<typeof getCodexAuth
   };
 }
 
+function ensureCodexInstructionsBody(body: BodyInit | null | undefined): BodyInit | null | undefined {
+  if (typeof body !== 'string') {
+    return body;
+  }
+
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    if (parsed.instructions == null) {
+      parsed.instructions = '';
+    }
+    if (parsed.store !== false) {
+      parsed.store = false;
+    }
+    delete parsed.previous_response_id;
+    if (Array.isArray(parsed.input)) {
+      parsed.input = parsed.input.map(stripCodexTransientIds);
+    }
+    return JSON.stringify(parsed);
+  } catch {
+    return body;
+  }
+}
+
+function stripCodexTransientIds(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stripCodexTransientIds);
+  }
+
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => key !== 'id')
+      .map(([key, nestedValue]) => [key, stripCodexTransientIds(nestedValue)]);
+    return Object.fromEntries(entries);
+  }
+
+  return value;
+}
+
+async function codexFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const url = typeof input === 'string'
+    ? input
+    : input instanceof URL
+      ? input.toString()
+      : input.url;
+
+  if (!url.includes('/responses')) {
+    return fetch(input, init);
+  }
+
+  const nextInit: RequestInit = {
+    ...init,
+    body: ensureCodexInstructionsBody(init?.body),
+  };
+
+  return fetch(input, nextInit);
+}
+
 async function discoverCodexCatalog(): Promise<CodexCatalog> {
   const auth = await getCodexAuthRecord();
   if (!auth) {
@@ -268,6 +325,7 @@ export async function getCodexProvider(): Promise<ProviderV2> {
       'User-Agent': CODEX_USER_AGENT,
       ...(auth.metadata.accountId ? { 'Chatgpt-Account-Id': auth.metadata.accountId } : {}),
     },
+    fetch: codexFetch,
   }) as unknown as ProviderV2;
 }
 
