@@ -5,6 +5,27 @@
 const path = require('path');
 const pkg = require('./package.json');
 
+const hasAppleNotarizeEnv = Boolean(
+    process.env.APPLE_ID &&
+    process.env.APPLE_PASSWORD &&
+    process.env.APPLE_TEAM_ID
+);
+
+const macSigningConfig = hasAppleNotarizeEnv ? {
+    osxSign: {
+        batchCodesignCalls: true,
+        optionsForFile: () => ({
+            entitlements: path.join(__dirname, 'entitlements.plist'),
+            'entitlements-inherit': path.join(__dirname, 'entitlements.plist'),
+        }),
+    },
+    osxNotarize: {
+        appleId: process.env.APPLE_ID,
+        appleIdPassword: process.env.APPLE_PASSWORD,
+        teamId: process.env.APPLE_TEAM_ID
+    },
+} : {};
+
 module.exports = {
     packagerConfig: {
         executableName: 'rowboat',
@@ -14,18 +35,7 @@ module.exports = {
         extendInfo: {
             NSAudioCaptureUsageDescription: 'Rowboat needs access to system audio to transcribe meetings from other apps (Zoom, Meet, etc.)',
         },
-        osxSign: {
-            batchCodesignCalls: true,
-            optionsForFile: () => ({
-                entitlements: path.join(__dirname, 'entitlements.plist'),
-                'entitlements-inherit': path.join(__dirname, 'entitlements.plist'),
-            }),
-        },
-        osxNotarize: {
-            appleId: process.env.APPLE_ID,
-            appleIdPassword: process.env.APPLE_PASSWORD,
-            teamId: process.env.APPLE_TEAM_ID
-        },
+        ...macSigningConfig,
         // Since we bundle everything with esbuild, we don't need node_modules at all.
         // These settings prevent Forge's dependency walker (flora-colossus) from trying
         // to analyze/copy node_modules, which fails with pnpm's symlinked workspaces.
