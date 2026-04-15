@@ -4,7 +4,7 @@ import { isSignedIn } from '../account/account.js';
 import { isCodexConnected } from '../auth/codex.js';
 import { getGatewayProvider } from './gateway.js';
 import { CODEX_DEFAULT_MODEL, CODEX_LIGHTWEIGHT_MODEL, getCodexProvider } from './codex.js';
-import { createProvider, Provider } from './models.js';
+import { ModelConfig, createProvider } from './models.js';
 
 export type ActiveProviderMode = 'rowboat' | 'chatgpt-codex' | 'byok';
 
@@ -17,9 +17,14 @@ export type ActiveProviderContext = {
 };
 
 export async function resolveActiveProvider(
-  config: z.infer<typeof Provider>,
+  config: z.infer<typeof ModelConfig>,
 ): Promise<ActiveProviderContext> {
-  if (await isSignedIn()) {
+  const providerMode = config.providerMode ?? 'byok';
+
+  if (providerMode === 'rowboat') {
+    if (!(await isSignedIn())) {
+      throw new Error('Rowboat is selected in Models, but the Rowboat account is not signed in.');
+    }
     return {
       mode: 'rowboat',
       provider: await getGatewayProvider(),
@@ -29,7 +34,10 @@ export async function resolveActiveProvider(
     };
   }
 
-  if (await isCodexConnected()) {
+  if (providerMode === 'chatgpt-codex') {
+    if (!(await isCodexConnected())) {
+      throw new Error('ChatGPT / Codex is selected in Models, but the account is not connected.');
+    }
     return {
       mode: 'chatgpt-codex',
       provider: await getCodexProvider(),
@@ -41,19 +49,13 @@ export async function resolveActiveProvider(
 
   return {
     mode: 'byok',
-    provider: createProvider(config),
+    provider: createProvider(config.provider),
     defaultModel: '',
     defaultKnowledgeGraphModel: '',
     defaultMeetingNotesModel: '',
   };
 }
 
-export async function getActiveProviderMode(): Promise<Exclude<ActiveProviderMode, 'byok'> | null> {
-  if (await isSignedIn()) {
-    return 'rowboat';
-  }
-  if (await isCodexConnected()) {
-    return 'chatgpt-codex';
-  }
-  return null;
+export function getActiveProviderMode(config: z.infer<typeof ModelConfig>): ActiveProviderMode {
+  return config.providerMode ?? 'byok';
 }

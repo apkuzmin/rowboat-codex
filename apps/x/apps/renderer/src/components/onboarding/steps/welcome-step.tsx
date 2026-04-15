@@ -2,7 +2,6 @@ import { Loader2, CheckCircle2 } from "lucide-react"
 import { motion } from "motion/react"
 import { Button } from "@/components/ui/button"
 import type { OnboardingState } from "../use-onboarding-state"
-import { OpenAIIcon } from "../provider-icons"
 
 interface WelcomeStepProps {
   state: OnboardingState
@@ -10,8 +9,6 @@ interface WelcomeStepProps {
 
 export function WelcomeStep({ state }: WelcomeStepProps) {
   const rowboatState = state.providerStates['rowboat'] || { isConnected: false, isLoading: false, isConnecting: false }
-  const codexState = state.providerStates['chatgpt-codex'] || { isConnected: false, isLoading: false, isConnecting: false }
-  const codexAvailable = state.providers.includes('chatgpt-codex')
 
   return (
     <div className="flex flex-col items-center justify-center text-center flex-1">
@@ -92,62 +89,6 @@ export function WelcomeStep({ state }: WelcomeStepProps) {
             )}
           </Button>
 
-          {codexAvailable && (
-            <>
-              <div className="flex w-full items-center gap-3 text-xs text-muted-foreground">
-                <div className="h-px flex-1 bg-border" />
-                <span>or</span>
-                <div className="h-px flex-1 bg-border" />
-              </div>
-              <div className="w-full rounded-xl border bg-muted/30 p-4 text-left">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="flex size-10 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                    <OpenAIIcon />
-                  </div>
-                  <div>
-                    <div className="text-sm font-semibold">ChatGPT / Codex</div>
-                    <div className="text-xs text-muted-foreground">Use your ChatGPT subscription as the provider</div>
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    className="flex-1"
-                    onClick={() => {
-                      if (codexState.isConnected) {
-                        state.setOnboardingPath('chatgpt-codex')
-                        state.setCurrentStep(2)
-                        return
-                      }
-                      state.setOnboardingPath('chatgpt-codex')
-                      state.startConnect('chatgpt-codex')
-                    }}
-                    disabled={codexState.isConnecting}
-                  >
-                    {codexState.isConnecting ? <Loader2 className="size-4 animate-spin mr-2" /> : null}
-                    {codexState.isConnected ? 'Continue' : 'Browser login'}
-                  </Button>
-                  {!codexState.isConnected && (
-                    <Button
-                      variant="ghost"
-                      onClick={() => {
-                        state.setOnboardingPath('chatgpt-codex')
-                        state.startDeviceConnect('chatgpt-codex')
-                      }}
-                      disabled={codexState.isConnecting}
-                    >
-                      Device code
-                    </Button>
-                  )}
-                </div>
-                {codexState.isConnecting && (
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Complete ChatGPT sign-in in your browser or enter the device code, then return here.
-                  </p>
-                )}
-              </div>
-            </>
-          )}
         </div>
       </motion.div>
 
@@ -161,11 +102,12 @@ export function WelcomeStep({ state }: WelcomeStepProps) {
         <button
           onClick={() => {
             state.setOnboardingPath('byok')
+            state.setLlmProviderMode('byok')
             state.setCurrentStep(1)
           }}
           className="text-sm text-muted-foreground hover:text-foreground transition-colors underline underline-offset-4 decoration-muted-foreground/30 hover:decoration-foreground/50"
         >
-          I want to bring my own API key
+          I want to choose a model provider
         </button>
       </motion.div>
     </div>

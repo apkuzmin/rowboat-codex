@@ -67,10 +67,11 @@ const providerDisplayNames: Record<string, string> = {
   aigateway: 'AI Gateway',
   'openai-compatible': 'OpenAI-Compatible',
   rowboat: 'Rowboat',
+  'chatgpt-codex': 'ChatGPT / Codex',
 }
 
 interface ConfiguredModel {
-  flavor: "openai" | "anthropic" | "google" | "openrouter" | "aigateway" | "ollama" | "openai-compatible" | "rowboat"
+  flavor: "openai" | "anthropic" | "google" | "openrouter" | "aigateway" | "ollama" | "openai-compatible" | "rowboat" | "chatgpt-codex"
   model: string
   apiKey?: string
   baseURL?: string
@@ -179,24 +180,33 @@ function ChatInputInner({
   // Load model config (gateway when signed in, local config when BYOK)
   const loadModelConfig = useCallback(async () => {
     try {
-      if (isRowboatConnected) {
-        // Fetch gateway models
-        const listResult = await window.ipc.invoke('models:list', null)
-        const rowboatProvider = listResult.providers?.find(
-          (p: { id: string }) => p.id === 'rowboat'
-        )
-        const models: ConfiguredModel[] = (rowboatProvider?.models || []).map(
-          (m: { id: string }) => ({ flavor: 'rowboat', model: m.id })
-        )
+      const result = await window.ipc.invoke('workspace:readFile', { path: 'config/models.json' })
+      const parsed = JSON.parse(result.data)
+      const providerMode = (parsed?.providerMode || 'byok') as 'byok' | 'rowboat' | 'chatgpt-codex'
 
-        // Read current default from config
-        let defaultModel = ''
+      if (providerMode === 'rowboat' || providerMode === 'chatgpt-codex') {
+        let models: ConfiguredModel[] = []
+        let resolvedDefaultModel = typeof parsed?.model === 'string' ? parsed.model : ''
         try {
-          const result = await window.ipc.invoke('workspace:readFile', { path: 'config/models.json' })
-          const parsed = JSON.parse(result.data)
-          defaultModel = parsed?.model || ''
-        } catch { /* no config yet */ }
+          const listResult = await window.ipc.invoke('models:list', { mode: providerMode })
+          const activeProvider = listResult.providers?.find(
+            (p: { id: string }) => p.id === providerMode
+          )
+          models = (activeProvider?.models || []).map(
+            (m: { id: string }) => ({ flavor: providerMode, model: m.id, knowledgeGraphModel: parsed?.knowledgeGraphModel || undefined })
+          )
+          const validIds = new Set(models.map((entry) => entry.model))
+          const providerMeta = activeProvider?.meta || {}
+          if (!validIds.has(resolvedDefaultModel)) {
+            resolvedDefaultModel = providerMeta.defaultModel || models[0]?.model || ''
+          }
+        } catch {
+          if (parsed?.model) {
+            models = [{ flavor: providerMode, model: parsed.model, knowledgeGraphModel: parsed.knowledgeGraphModel || undefined }]
+          }
+        }
 
+        const defaultModel = resolvedDefaultModel
         if (defaultModel) {
           models.sort((a, b) => {
             if (a.model === defaultModel) return -1
@@ -207,13 +217,10 @@ function ChatInputInner({
 
         setConfiguredModels(models)
         const activeKey = defaultModel
-          ? `rowboat/${defaultModel}`
-          : models[0] ? `rowboat/${models[0].model}` : ''
+          ? `${providerMode}/${defaultModel}`
+          : models[0] ? `${providerMode}/${models[0].model}` : ''
         if (activeKey) setActiveModelKey(activeKey)
       } else {
-        // BYOK: read from local models.json
-        const result = await window.ipc.invoke('workspace:readFile', { path: 'config/models.json' })
-        const parsed = JSON.parse(result.data)
         const models: ConfiguredModel[] = []
         if (parsed?.providers) {
           for (const [flavor, entry] of Object.entries(parsed.providers)) {
@@ -290,10 +297,14 @@ function ChatInputInner({
     setActiveModelKey(key)
 
     try {
-      if (entry.flavor === 'rowboat') {
-        // Gateway model — save with valid Zod flavor, no credentials
+      if (entry.flavor === 'rowboat' || entry.flavor === 'chatgpt-codex') {
+        const result = await window.ipc.invoke('workspace:readFile', { path: 'config/models.json' })
+        const parsed = JSON.parse(result.data)
         await window.ipc.invoke('models:saveConfig', {
-          provider: { flavor: 'openrouter' as const },
+          providerMode: entry.flavor,
+          provider: parsed?.provider?.flavor
+            ? parsed.provider
+            : { flavor: 'openai' as const },
           model: entry.model,
           knowledgeGraphModel: entry.knowledgeGraphModel,
         })
@@ -303,6 +314,7 @@ function ChatInputInner({
           .filter((m) => m.flavor === entry.flavor)
           .map((m) => m.model)
         await window.ipc.invoke('models:saveConfig', {
+          providerMode: 'byok',
           provider: {
             flavor: entry.flavor,
             apiKey: entry.apiKey,

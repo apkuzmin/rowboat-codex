@@ -653,7 +653,7 @@ export async function processRowboatInstruction(
 export async function classifySchedule(instruction: string): Promise<InlineTaskSchedule | null> {
     const repo = container.resolve<IModelConfigRepo>('modelConfigRepo');
     const config = await repo.getConfig();
-    const provider = (await resolveActiveProvider(config.provider)).provider;
+    const provider = (await resolveActiveProvider(config)).provider;
     const model = provider.languageModel(config.model);
 
     const now = new Date();

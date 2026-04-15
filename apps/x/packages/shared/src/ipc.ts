@@ -194,7 +194,9 @@ const ipcSchemas = {
     res: z.null(),
   },
   'models:list': {
-    req: z.null(),
+    req: z.object({
+      mode: z.enum(['active', 'byok', 'rowboat', 'chatgpt-codex']).optional(),
+    }).nullable(),
     res: z.object({
       providers: z.array(z.object({
         id: z.string(),
@@ -204,6 +206,13 @@ const ipcSchemas = {
           name: z.string().optional(),
           release_date: z.string().optional(),
         })),
+        meta: z.object({
+          catalogSource: z.enum(['discovered', 'fallback']).optional(),
+          invalidSavedModels: z.array(z.string()).optional(),
+          defaultModel: z.string().optional(),
+          defaultKnowledgeGraphModel: z.string().optional(),
+          defaultMeetingNotesModel: z.string().optional(),
+        }).optional(),
       })),
       lastUpdated: z.string().optional(),
     }),

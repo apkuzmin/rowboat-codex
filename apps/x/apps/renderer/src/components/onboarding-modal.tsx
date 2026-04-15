@@ -459,6 +459,7 @@ export function OnboardingModal({ open, onComplete }: OnboardingModalProps) {
       const model = activeConfig.model.trim()
       const knowledgeGraphModel = activeConfig.knowledgeGraphModel.trim() || undefined
       const providerConfig = {
+        providerMode: "byok" as const,
         provider: {
           flavor: llmProvider,
           apiKey,

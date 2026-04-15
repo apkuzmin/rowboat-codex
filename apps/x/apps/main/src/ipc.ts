@@ -46,6 +46,7 @@ import { getBillingInfo } from '@x/core/dist/billing/billing.js';
 import { summarizeMeeting } from '@x/core/dist/knowledge/summarize_meeting.js';
 import { getAccessToken } from '@x/core/dist/auth/tokens.js';
 import { getRowboatConfig } from '@x/core/dist/config/rowboat.js';
+import { WorkDir } from '@x/core/dist/config/config.js';
 
 /**
  * Convert markdown to a styled HTML document for PDF/DOCX export.
@@ -447,13 +448,47 @@ export function setupIpcHandlers() {
       await runsCore.deleteRun(args.runId);
       return { success: true };
     },
-    'models:list': async () => {
-      const activeProviderMode = await getActiveProviderMode();
+    'models:list': async (_event, args) => {
+      const requestedMode = args?.mode ?? 'active';
+      let activeProviderMode: 'byok' | 'rowboat' | 'chatgpt-codex';
+      const repo = container.resolve<IModelConfigRepo>('modelConfigRepo');
+      let rawSavedCodexModelIds: string[] = [];
+      try {
+        const raw = JSON.parse(await fs.readFile(path.join(WorkDir, 'config', 'models.json'), 'utf8'));
+        if ((raw.providerMode ?? 'byok') === 'chatgpt-codex') {
+          rawSavedCodexModelIds = [
+            raw.model,
+            ...(Array.isArray(raw.models) ? raw.models : []),
+            raw.knowledgeGraphModel,
+            raw.meetingNotesModel,
+          ].filter((value): value is string => typeof value === 'string');
+        }
+      } catch {
+        // Ignore missing or malformed raw config and fall back to the normalized config below.
+      }
+      const config = await repo.getConfig();
+
+      if (requestedMode === 'active') {
+        activeProviderMode = getActiveProviderMode(config);
+      } else {
+        activeProviderMode = requestedMode;
+      }
+
       if (activeProviderMode === 'rowboat') {
         return await listGatewayModels();
       }
       if (activeProviderMode === 'chatgpt-codex') {
-        return await listCodexModels();
+        const savedModelIds = rawSavedCodexModelIds.length > 0
+          ? rawSavedCodexModelIds
+          : (config.providerMode ?? 'byok') === 'chatgpt-codex'
+          ? [
+            config.model,
+            ...(config.models ?? []),
+            config.knowledgeGraphModel ?? '',
+            config.meetingNotesModel ?? '',
+          ]
+          : [];
+        return await listCodexModels(savedModelIds);
       }
       return await listOnboardingModels();
     },

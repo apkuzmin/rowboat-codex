@@ -19,7 +19,6 @@ import { Separator } from "@/components/ui/separator"
 import { GoogleClientIdModal } from "@/components/google-client-id-modal"
 import { ComposioApiKeyModal } from "@/components/composio-api-key-modal"
 import { useConnectors } from "@/hooks/useConnectors"
-import { OpenAIIcon } from "@/components/onboarding/provider-icons"
 
 interface ConnectorsPopoverProps {
   children: React.ReactNode
@@ -109,27 +108,6 @@ export function ConnectorsPopover({ children, tooltip, open: openProp, onOpenCha
             >
               {provider === 'rowboat' ? 'Log Out' : 'Disconnect'}
             </Button>
-          ) : provider === 'chatgpt-codex' ? (
-            <div className="flex items-center gap-1">
-              <Button
-                variant="default"
-                size="sm"
-                onClick={() => c.handleConnect(provider)}
-                disabled={state.isConnecting}
-                className="h-7 px-2 text-xs"
-              >
-                {state.isConnecting ? <Loader2 className="size-3 animate-spin" /> : 'Connect'}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => c.startDeviceConnect(provider)}
-                disabled={state.isConnecting}
-                className="h-7 px-2 text-xs"
-              >
-                Code
-              </Button>
-            </div>
           ) : (
             <Button
               variant="default"
@@ -181,13 +159,7 @@ export function ConnectorsPopover({ children, tooltip, open: openProp, onOpenCha
     return !rowboatState?.isConnected || rowboatState?.isLoading
   })()
 
-  const isCodexUnconnected = (() => {
-    if (!c.providers.includes('chatgpt-codex')) return false
-    const codexState = c.providerStates['chatgpt-codex']
-    return !codexState?.isConnected || codexState?.isLoading || Boolean(c.providerStatus['chatgpt-codex']?.error)
-  })()
-
-  const allConnected = isUnconnectedMode && !isRowboatUnconnected && !isCodexUnconnected && !hasUnconnectedEmailCalendar && !hasUnconnectedMeetingNotes
+  const allConnected = isUnconnectedMode && !isRowboatUnconnected && !hasUnconnectedEmailCalendar && !hasUnconnectedMeetingNotes
 
   return (
     <>
@@ -262,7 +234,6 @@ export function ConnectorsPopover({ children, tooltip, open: openProp, onOpenCha
                     <span className="text-xs font-medium text-muted-foreground">Account</span>
                   </div>
                   {renderOAuthProvider('rowboat', 'Rowboat', <User className="size-4" />, 'Log in to your Rowboat account')}
-                  {c.providers.includes('chatgpt-codex') && renderOAuthProvider('chatgpt-codex', 'ChatGPT / Codex', <OpenAIIcon className="size-4" />, 'Use your ChatGPT subscription with Codex')}
                   <Separator className="my-2" />
                 </>
               )

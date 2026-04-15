@@ -361,8 +361,31 @@ function formatLlmStreamError(rawError: unknown): string {
 
     const lines: string[] = [];
     if (name) lines.push(`name: ${name}`);
+    const normalizedCodexError = normalizeCodexModelError(responseBody);
+    if (normalizedCodexError) {
+        lines.push(normalizedCodexError);
+        return lines.join("\n");
+    }
     if (responseBody) lines.push(`responseBody: ${responseBody}`);
     return lines.length ? lines.join("\n") : "Model stream error";
+}
+
+function normalizeCodexModelError(responseBody?: string): string | null {
+    if (!responseBody) {
+        return null;
+    }
+
+    try {
+        const parsed = JSON.parse(responseBody) as { detail?: unknown };
+        const detail = typeof parsed.detail === "string" ? parsed.detail : "";
+        if (detail.includes("not supported when using Codex with a ChatGPT account")) {
+            return "Selected ChatGPT / Codex model is no longer supported for this account. Open Settings -> Models and choose one of the current ChatGPT / Codex models.";
+        }
+    } catch {
+        // Ignore parse failures and fall back to the raw response body.
+    }
+
+    return null;
 }
 
 export async function loadAgent(id: string): Promise<z.infer<typeof Agent>> {
@@ -848,7 +871,7 @@ export async function* streamAgent({
     const tools = await buildTools(agent);
 
     // set up provider + model
-    const activeProvider = await resolveActiveProvider(modelConfig.provider);
+    const activeProvider = await resolveActiveProvider(modelConfig);
     const provider = activeProvider.provider;
     const knowledgeGraphAgents = ["note_creation", "email-draft", "meeting-prep", "labeling_agent", "note_tagging_agent", "agent_notes_agent"];
     const isKgAgent = knowledgeGraphAgents.includes(state.agentName!);

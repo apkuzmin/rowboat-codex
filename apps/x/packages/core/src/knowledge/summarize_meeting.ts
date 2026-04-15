@@ -138,7 +138,7 @@ function loadCalendarEventContext(calendarEventJson: string): string {
 export async function summarizeMeeting(transcript: string, meetingStartTime?: string, calendarEventJson?: string): Promise<string> {
     const repo = container.resolve<IModelConfigRepo>('modelConfigRepo');
     const config = await repo.getConfig();
-    const activeProvider = await resolveActiveProvider(config.provider);
+    const activeProvider = await resolveActiveProvider(config);
     const provider = activeProvider.provider;
     const modelId = config.meetingNotesModel
         || (activeProvider.mode === 'byok' ? config.model : activeProvider.defaultMeetingNotesModel);
