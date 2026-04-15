@@ -14,6 +14,7 @@ export const CHATGPT_CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 export const CHATGPT_CODEX_DEVICE_USER_CODE_URL = 'https://auth.openai.com/api/accounts/deviceauth/usercode';
 export const CHATGPT_CODEX_DEVICE_TOKEN_URL = 'https://auth.openai.com/api/accounts/deviceauth/token';
 export const CHATGPT_CODEX_DEVICE_VERIFICATION_URL = 'https://auth.openai.com/codex/device';
+export const CHATGPT_CODEX_ORIGINATOR = 'codex-tui';
 
 const CHATGPT_CODEX_SCOPES = 'openid email profile offline_access';
 const DEVICE_POLL_TIMEOUT_MS = 15 * 60 * 1000;
@@ -132,7 +133,7 @@ function toTokenRecord(bundle: z.infer<typeof CodexTokenBundleSchema>, fallbackR
   };
 }
 
-function maskIdentifier(value?: string | null): string | null {
+export function maskIdentifier(value?: string | null): string | null {
   if (!value) {
     return null;
   }
@@ -140,6 +141,19 @@ function maskIdentifier(value?: string | null): string | null {
     return `${value.slice(0, 2)}***`;
   }
   return `${value.slice(0, 3)}***${value.slice(-3)}`;
+}
+
+export function buildCodexHeaders(
+  auth: CodexTokenRecord,
+  extraHeaders: Record<string, string> = {},
+): Record<string, string> {
+  return {
+    Authorization: `Bearer ${auth.tokens.access_token}`,
+    Accept: 'application/json',
+    Originator: CHATGPT_CODEX_ORIGINATOR,
+    ...extraHeaders,
+    ...(auth.metadata.accountId ? { 'Chatgpt-Account-Id': auth.metadata.accountId } : {}),
+  };
 }
 
 async function fetchJson<T>(

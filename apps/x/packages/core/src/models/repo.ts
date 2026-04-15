@@ -22,6 +22,28 @@ const defaultConfig: z.infer<typeof ModelConfig> = {
 export class FSModelConfigRepo implements IModelConfigRepo {
     private readonly configPath = path.join(WorkDir, "config", "models.json");
 
+    private async loadRawConfig(): Promise<unknown | null> {
+        try {
+            const config = await fs.readFile(this.configPath, "utf8");
+            return JSON.parse(config);
+        } catch {
+            return null;
+        }
+    }
+
+    private async parseConfigOrDefault(raw: unknown): Promise<z.infer<typeof ModelConfig>> {
+        try {
+            return ModelConfig.parse(raw);
+        } catch (error) {
+            console.warn(
+                "[ModelConfigRepo] Invalid models.json detected. Falling back to default config:",
+                error instanceof Error ? error.message : String(error),
+            );
+            await fs.writeFile(this.configPath, JSON.stringify(defaultConfig, null, 2));
+            return defaultConfig;
+        }
+    }
+
     async ensureConfig(): Promise<void> {
         try {
             await fs.access(this.configPath);
@@ -31,8 +53,8 @@ export class FSModelConfigRepo implements IModelConfigRepo {
     }
 
     async getConfig(): Promise<z.infer<typeof ModelConfig>> {
-        const config = await fs.readFile(this.configPath, "utf8");
-        const parsed = ModelConfig.parse(JSON.parse(config));
+        const raw = await this.loadRawConfig();
+        const parsed = await this.parseConfigOrDefault(raw ?? defaultConfig);
         const normalized = await normalizeCodexModelConfig(parsed);
         if (normalized.changed) {
             await this.setConfig(normalized.config);
@@ -46,15 +68,17 @@ export class FSModelConfigRepo implements IModelConfigRepo {
         const providerMode = config.providerMode ?? "byok";
         let existingProviders: Record<string, Record<string, unknown>> = {};
         let existingTopLevelProvider = config.provider;
-        try {
-            const raw = await fs.readFile(this.configPath, "utf8");
-            const existing = JSON.parse(raw);
-            existingProviders = existing.providers || {};
-            if (existing.provider?.flavor) {
-                existingTopLevelProvider = existing.provider;
+        const existing = await this.loadRawConfig();
+        if (existing && typeof existing === "object") {
+            const existingRecord = existing as Record<string, unknown>;
+            existingProviders = (existingRecord.providers as Record<string, Record<string, unknown>> | undefined) || {};
+            if (
+                existingRecord.provider
+                && typeof existingRecord.provider === "object"
+                && "flavor" in (existingRecord.provider as Record<string, unknown>)
+            ) {
+                existingTopLevelProvider = existingRecord.provider as z.infer<typeof ModelConfig>["provider"];
             }
-        } catch {
-            // No existing config
         }
 
         if (providerMode === "byok") {

@@ -14,7 +14,8 @@ import { buildCopilotAgent } from "../application/assistant/agent.js";
 import { isBlocked, extractCommandNames } from "../application/lib/command-executor.js";
 import container from "../di/container.js";
 import { IModelConfigRepo } from "../models/repo.js";
-import { resolveActiveProvider } from "../models/active-provider.js";
+import { ActiveProviderMode, resolveActiveProvider } from "../models/active-provider.js";
+import { normalizeCodexError, streamCodexStep } from "../models/codex-runtime.js";
 import { IAgentsRepo } from "./repo.js";
 import { IMonotonicallyIncreasingIdGenerator } from "../application/lib/id-gen.js";
 import { IBus } from "../application/lib/bus.js";
@@ -361,31 +362,13 @@ function formatLlmStreamError(rawError: unknown): string {
 
     const lines: string[] = [];
     if (name) lines.push(`name: ${name}`);
-    const normalizedCodexError = normalizeCodexModelError(responseBody);
-    if (normalizedCodexError) {
-        lines.push(normalizedCodexError);
+    const normalizedCodexError = normalizeCodexError({ responseBody });
+    if (normalizedCodexError.code !== "unknown") {
+        lines.push(normalizedCodexError.message);
         return lines.join("\n");
     }
     if (responseBody) lines.push(`responseBody: ${responseBody}`);
     return lines.length ? lines.join("\n") : "Model stream error";
-}
-
-function normalizeCodexModelError(responseBody?: string): string | null {
-    if (!responseBody) {
-        return null;
-    }
-
-    try {
-        const parsed = JSON.parse(responseBody) as { detail?: unknown };
-        const detail = typeof parsed.detail === "string" ? parsed.detail : "";
-        if (detail.includes("not supported when using Codex with a ChatGPT account")) {
-            return "Selected ChatGPT / Codex model is no longer supported for this account. Open Settings -> Models and choose one of the current ChatGPT / Codex models.";
-        }
-    } catch {
-        // Ignore parse failures and fall back to the raw response body.
-    }
-
-    return null;
 }
 
 export async function loadAgent(id: string): Promise<z.infer<typeof Agent>> {
@@ -1087,11 +1070,14 @@ export async function* streamAgent({
         }
         let streamError: string | null = null;
         for await (const event of streamLlm(
+            activeProvider.mode,
+            modelId,
             model,
             state.messages,
             instructionsWithDateTime,
             tools,
             signal,
+            `${runId}:${state.agentName}:iter-${loopCounter}`,
         )) {
             messageBuilder.ingest(event);
             yield* processEvent({
@@ -1180,14 +1166,32 @@ export async function* streamAgent({
 }
 
 async function* streamLlm(
+    providerMode: ActiveProviderMode,
+    modelId: string,
     model: LanguageModel,
     messages: z.infer<typeof MessageList>,
     instructions: string,
     tools: ToolSet,
     signal?: AbortSignal,
+    traceLabel?: string,
 ): AsyncGenerator<z.infer<typeof LlmStepStreamEvent>, void, unknown> {
     const converted = convertFromMessages(messages);
     console.log(`! SENDING payload to model: `, JSON.stringify(converted))
+
+    if (providerMode === "chatgpt-codex") {
+        for await (const event of streamCodexStep({
+            modelId,
+            messages: converted,
+            system: instructions,
+            tools,
+            signal,
+            traceLabel,
+        })) {
+            yield event;
+        }
+        return;
+    }
+
     const { fullStream } = streamText({
         model,
         messages: converted,
