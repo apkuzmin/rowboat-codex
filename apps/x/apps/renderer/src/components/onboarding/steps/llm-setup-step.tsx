@@ -40,19 +40,46 @@ const moreProviders: Array<{ id: LlmProviderFlavor; name: string; description: s
 
 export function LlmSetupStep({ state }: LlmSetupStepProps) {
   const {
-    llmProvider, setLlmProvider, modelsCatalog, modelsLoading, modelsError,
-    activeConfig, testState, setTestState, showApiKey,
-    showBaseURL, isLocalProvider, canTest, showMoreProviders, setShowMoreProviders,
-    updateProviderConfig, handleTestAndSaveLlmConfig, handleBack,
-    upsellDismissed, setUpsellDismissed, handleSwitchToRowboat,
+    llmProviderMode,
+    setLlmProviderMode,
+    llmProvider,
+    setLlmProvider,
+    modelsCatalog,
+    catalogMeta,
+    modelsLoading,
+    modelsError,
+    activeConfig,
+    testState,
+    setTestState,
+    showApiKey,
+    showBaseURL,
+    isLocalProvider,
+    canTest,
+    canSaveAccountProvider,
+    showMoreProviders,
+    setShowMoreProviders,
+    updateProviderConfig,
+    updateAccountProviderConfig,
+    handleTestAndSaveLlmConfig,
+    handleBack,
+    providerStates,
+    providerStatus,
+    handleConnect,
+    startDeviceConnect,
+    setOnboardingPath,
+    upsellDismissed,
+    setUpsellDismissed,
+    handleSwitchToRowboat,
   } = state
 
-  const isMoreProvider = moreProviders.some(p => p.id === llmProvider)
-  const modelsForProvider = modelsCatalog[llmProvider] || []
-  const showModelInput = isLocalProvider || modelsForProvider.length === 0
+  const codexState = providerStates["chatgpt-codex"] || { isConnected: false, isLoading: false, isConnecting: false }
+  const isMoreProvider = llmProviderMode === "byok" && moreProviders.some(p => p.id === llmProvider)
+  const modelsForProvider = modelsCatalog[llmProviderMode === "byok" ? llmProvider : llmProviderMode] || []
+  const selectedCatalogMeta = catalogMeta[llmProviderMode === "byok" ? llmProvider : llmProviderMode] || {}
+  const showModelInput = llmProviderMode === "byok" && (isLocalProvider || modelsForProvider.length === 0)
 
   const renderProviderCard = (provider: typeof primaryProviders[0], index: number) => {
-    const isSelected = llmProvider === provider.id
+    const isSelected = llmProviderMode === "byok" && llmProvider === provider.id
     return (
       <motion.button
         key={provider.id}
@@ -60,6 +87,8 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: index * 0.05 }}
         onClick={() => {
+          setLlmProviderMode("byok")
+          setOnboardingPath("byok")
           setLlmProvider(provider.id)
           setTestState({ status: "idle" })
         }}
@@ -85,15 +114,13 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
 
   return (
     <div className="flex flex-col flex-1">
-      {/* Title */}
       <h2 className="text-3xl font-bold tracking-tight text-center mb-2">
-        Choose your model
+        Choose your model provider
       </h2>
       <p className="text-base text-muted-foreground text-center mb-6">
-        Select a provider and configure your API key
+        Select how Rowboat should access models
       </p>
 
-      {/* Inline Rowboat upsell callout */}
       {!upsellDismissed && (
         <motion.div
           initial={{ opacity: 0, y: -8 }}
@@ -122,9 +149,41 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
         </motion.div>
       )}
 
-      {/* Provider selection */}
       <div className="space-y-3 mb-4">
         <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Provider</span>
+        {state.providers.includes("chatgpt-codex") && (
+          <motion.button
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.02 }}
+            onClick={() => {
+              setLlmProviderMode("chatgpt-codex")
+              setOnboardingPath("chatgpt-codex")
+              setTestState({ status: "idle" })
+            }}
+            className={cn(
+              "w-full rounded-xl border-2 p-4 text-left transition-all",
+              llmProviderMode === "chatgpt-codex"
+                ? "border-primary bg-primary/5 shadow-sm"
+                : "border-transparent bg-muted/50 hover:bg-muted"
+            )}
+          >
+            <div className="flex items-center gap-3">
+              <div className="size-10 rounded-lg flex items-center justify-center shrink-0 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                <OpenAIIcon />
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold">ChatGPT / Codex</div>
+                <div className="text-xs text-muted-foreground">Use your ChatGPT subscription</div>
+                <div className="mt-1 text-[11px] text-muted-foreground">
+                  {codexState.isLoading ? "Checking connection..." : codexState.isConnected
+                    ? ([providerStatus["chatgpt-codex"]?.email, providerStatus["chatgpt-codex"]?.planType].filter(Boolean).join(" · ") || "Connected")
+                    : "Connect in-browser or with a device code"}
+                </div>
+              </div>
+            </div>
+          </motion.button>
+        )}
         <div className="grid gap-2 sm:grid-cols-2">
           {primaryProviders.map((p, i) => renderProviderCard(p, i))}
         </div>
@@ -142,10 +201,8 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
         )}
       </div>
 
-      {/* Separator */}
       <div className="h-px bg-border my-4" />
 
-      {/* Model configuration */}
       <div className="space-y-4">
         <h3 className="text-sm font-semibold">Model Configuration</h3>
 
@@ -159,16 +216,24 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
                 <Loader2 className="size-4 animate-spin" />
                 Loading...
               </div>
+            ) : llmProviderMode === "chatgpt-codex" && !codexState.isConnected ? (
+              <div className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">
+                Connect ChatGPT / Codex to choose a model.
+              </div>
             ) : showModelInput ? (
               <Input
                 value={activeConfig.model}
-                onChange={(e) => updateProviderConfig(llmProvider, { model: e.target.value })}
+                onChange={(e) => llmProviderMode === "byok"
+                  ? updateProviderConfig(llmProvider, { model: e.target.value })
+                  : updateAccountProviderConfig("chatgpt-codex", { model: e.target.value })}
                 placeholder="Enter model"
               />
             ) : (
               <Select
                 value={activeConfig.model}
-                onValueChange={(value) => updateProviderConfig(llmProvider, { model: value })}
+                onValueChange={(value) => llmProviderMode === "byok"
+                  ? updateProviderConfig(llmProvider, { model: value })
+                  : updateAccountProviderConfig("chatgpt-codex", { model: value })}
               >
                 <SelectTrigger className="w-full truncate">
                   <SelectValue placeholder="Select a model" />
@@ -196,16 +261,24 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
                 <Loader2 className="size-4 animate-spin" />
                 Loading...
               </div>
+            ) : llmProviderMode === "chatgpt-codex" && !codexState.isConnected ? (
+              <div className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">
+                Account-backed providers unlock model choices after connection.
+              </div>
             ) : showModelInput ? (
               <Input
                 value={activeConfig.knowledgeGraphModel}
-                onChange={(e) => updateProviderConfig(llmProvider, { knowledgeGraphModel: e.target.value })}
+                onChange={(e) => llmProviderMode === "byok"
+                  ? updateProviderConfig(llmProvider, { knowledgeGraphModel: e.target.value })
+                  : updateAccountProviderConfig("chatgpt-codex", { knowledgeGraphModel: e.target.value })}
                 placeholder={activeConfig.model || "Enter model"}
               />
             ) : (
               <Select
                 value={activeConfig.knowledgeGraphModel || "__same__"}
-                onValueChange={(value) => updateProviderConfig(llmProvider, { knowledgeGraphModel: value === "__same__" ? "" : value })}
+                onValueChange={(value) => llmProviderMode === "byok"
+                  ? updateProviderConfig(llmProvider, { knowledgeGraphModel: value === "__same__" ? "" : value })
+                  : updateAccountProviderConfig("chatgpt-codex", { knowledgeGraphModel: value === "__same__" ? "" : value })}
               >
                 <SelectTrigger className="w-full truncate">
                   <SelectValue placeholder="Select a model" />
@@ -223,6 +296,39 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
           </div>
         </div>
 
+        {llmProviderMode === "chatgpt-codex" && (selectedCatalogMeta.invalidSavedModels?.length || selectedCatalogMeta.catalogSource === "fallback") && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            {selectedCatalogMeta.invalidSavedModels?.length
+              ? "Previously saved ChatGPT / Codex models are no longer available. Review the refreshed options before saving."
+              : "Live ChatGPT / Codex catalog could not be fetched. Showing the built-in fallback model list."}
+          </div>
+        )}
+
+        {llmProviderMode === "chatgpt-codex" && (
+          <div className="rounded-xl border px-4 py-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium">ChatGPT / Codex account</div>
+                <div className="text-xs text-muted-foreground">
+                  {codexState.isLoading ? "Checking connection..." : codexState.isConnected
+                    ? ([providerStatus["chatgpt-codex"]?.email, providerStatus["chatgpt-codex"]?.planType].filter(Boolean).join(" · ") || "Connected")
+                    : "Not connected"}
+                </div>
+              </div>
+              {!codexState.isConnected && (
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => handleConnect("chatgpt-codex")} disabled={codexState.isConnecting}>
+                    {codexState.isConnecting ? <Loader2 className="size-4 animate-spin" /> : "Browser login"}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => startDeviceConnect("chatgpt-codex")} disabled={codexState.isConnecting}>
+                    Device code
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {showApiKey && (
           <div className="space-y-2">
             <label className="text-xs font-medium text-muted-foreground">
@@ -230,7 +336,7 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
             </label>
             <Input
               type="password"
-              value={activeConfig.apiKey}
+              value={"apiKey" in activeConfig && typeof activeConfig.apiKey === "string" ? activeConfig.apiKey : ""}
               onChange={(e) => updateProviderConfig(llmProvider, { apiKey: e.target.value })}
               placeholder="Paste your API key"
               className="font-mono"
@@ -244,7 +350,7 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
               Base URL
             </label>
             <Input
-              value={activeConfig.baseURL}
+              value={"baseURL" in activeConfig && typeof activeConfig.baseURL === "string" ? activeConfig.baseURL : ""}
               onChange={(e) => updateProviderConfig(llmProvider, { baseURL: e.target.value })}
               placeholder={
                 llmProvider === "ollama"
@@ -259,7 +365,6 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
         )}
       </div>
 
-      {/* Footer */}
       <div className="flex items-center justify-between mt-6 pt-4 border-t">
         <Button variant="ghost" onClick={handleBack} className="gap-1">
           <ArrowLeft className="size-4" />
@@ -274,7 +379,7 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
               className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400"
             >
               <CheckCircle2 className="size-4" />
-              Connected
+              Saved
             </motion.div>
           )}
           {testState.status === "error" && (
@@ -284,13 +389,13 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
           )}
           <Button
             onClick={handleTestAndSaveLlmConfig}
-            disabled={!canTest || testState.status === "testing"}
+            disabled={(llmProviderMode === "byok" ? !canTest : !canSaveAccountProvider) || testState.status === "testing"}
             className="min-w-[140px]"
           >
             {testState.status === "testing" ? (
-              <><Loader2 className="size-4 animate-spin mr-2" />Testing...</>
+              <><Loader2 className="size-4 animate-spin mr-2" />{llmProviderMode === "byok" ? "Testing..." : "Saving..."}</>
             ) : (
-              "Test & Continue"
+              llmProviderMode === "byok" ? "Test & Continue" : "Save & Continue"
             )}
           </Button>
         </div>

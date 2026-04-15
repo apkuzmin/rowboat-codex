@@ -22,7 +22,7 @@ interface StepIndicatorProps {
 }
 
 export function StepIndicator({ currentStep, path }: StepIndicatorProps) {
-  const steps = path === 'byok' ? BYOK_STEPS : ROWBOAT_STEPS
+  const steps = path === 'rowboat' ? ROWBOAT_STEPS : BYOK_STEPS
   const currentIndex = steps.findIndex(s => s.step === currentStep)
 
   return (

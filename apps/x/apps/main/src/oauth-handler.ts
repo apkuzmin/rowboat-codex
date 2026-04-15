@@ -24,7 +24,7 @@ import {
   pollCodexDeviceAuthorization,
   requestCodexDeviceCode,
 } from '@x/core/dist/auth/codex.js';
-import { CODEX_DEFAULT_MODEL, CODEX_LIGHTWEIGHT_MODEL } from '@x/core/dist/models/codex.js';
+import { normalizeCodexModelConfig } from '@x/core/dist/models/codex.js';
 import { emitOAuthEvent } from './ipc.js';
 import { getBillingInfo } from '@x/core/dist/billing/billing.js';
 
@@ -125,18 +125,13 @@ function getOAuthRepo(): IOAuthRepo {
 async function ensureCodexModelDefaults(): Promise<void> {
   const modelConfigRepo = container.resolve('modelConfigRepo') as IModelConfigRepo;
   const config = await modelConfigRepo.getConfig();
-  const validModels = new Set([CODEX_DEFAULT_MODEL, CODEX_LIGHTWEIGHT_MODEL]);
-  const nextConfig = {
-    ...config,
-    model: validModels.has(config.model) ? config.model : CODEX_DEFAULT_MODEL,
-    knowledgeGraphModel: validModels.has(config.knowledgeGraphModel ?? '')
-      ? config.knowledgeGraphModel
-      : CODEX_LIGHTWEIGHT_MODEL,
-    meetingNotesModel: validModels.has(config.meetingNotesModel ?? '')
-      ? config.meetingNotesModel
-      : CODEX_LIGHTWEIGHT_MODEL,
-  };
-  await modelConfigRepo.setConfig(nextConfig);
+  if ((config.providerMode ?? 'byok') !== CHATGPT_CODEX_PROVIDER) {
+    return;
+  }
+  const normalized = await normalizeCodexModelConfig(config);
+  if (normalized.changed) {
+    await modelConfigRepo.setConfig(normalized.config);
+  }
 }
 
 async function persistCodexConnection(result: {

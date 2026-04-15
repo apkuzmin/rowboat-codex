@@ -24,6 +24,7 @@ import { useTheme } from "@/contexts/theme-context"
 import { toast } from "sonner"
 import { AccountSettings } from "@/components/settings/account-settings"
 import { ConnectedAccountsSettings } from "@/components/settings/connected-accounts-settings"
+import { useConnectors } from "@/hooks/useConnectors"
 
 type ConfigTab = "account" | "connected-accounts" | "models" | "mcp" | "security" | "appearance" | "tools" | "note-tagging"
 
@@ -163,11 +164,35 @@ function AppearanceSettings() {
 // --- Model Settings UI ---
 
 type LlmProviderFlavor = "openai" | "anthropic" | "google" | "openrouter" | "aigateway" | "ollama" | "openai-compatible"
+type ProviderMode = "byok" | "rowboat" | "chatgpt-codex"
+type AccountProviderMode = Exclude<ProviderMode, "byok">
 
 interface LlmModelOption {
   id: string
   name?: string
   release_date?: string
+}
+
+interface ProviderCatalogMeta {
+  catalogSource?: "discovered" | "fallback"
+  invalidSavedModels?: string[]
+  defaultModel?: string
+  defaultKnowledgeGraphModel?: string
+  defaultMeetingNotesModel?: string
+}
+
+interface ByokProviderConfig {
+  apiKey: string
+  baseURL: string
+  models: string[]
+  knowledgeGraphModel: string
+  meetingNotesModel: string
+}
+
+interface AccountProviderConfig {
+  models: string[]
+  knowledgeGraphModel: string
+  meetingNotesModel: string
 }
 
 const primaryProviders: Array<{ id: LlmProviderFlavor; name: string; description: string }> = [
@@ -193,43 +218,77 @@ const defaultBaseURLs: Partial<Record<LlmProviderFlavor, string>> = {
   "openai-compatible": "http://localhost:1234/v1",
 }
 
+const accountProviders: Array<{ id: AccountProviderMode; name: string; description: string }> = [
+  { id: "rowboat", name: "Rowboat", description: "Use your Rowboat account" },
+  { id: "chatgpt-codex", name: "ChatGPT / Codex", description: "Use your ChatGPT subscription" },
+]
+
 function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
+  const connectors = useConnectors(dialogOpen)
+  const [providerMode, setProviderMode] = useState<ProviderMode>("byok")
   const [provider, setProvider] = useState<LlmProviderFlavor>("openai")
   const [defaultProvider, setDefaultProvider] = useState<LlmProviderFlavor | null>(null)
-  const [providerConfigs, setProviderConfigs] = useState<Record<LlmProviderFlavor, { apiKey: string; baseURL: string; models: string[]; knowledgeGraphModel: string }>>({
-    openai: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "" },
-    anthropic: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "" },
-    google: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "" },
-    openrouter: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "" },
-    aigateway: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "" },
-    ollama: { apiKey: "", baseURL: "http://localhost:11434", models: [""], knowledgeGraphModel: "" },
-    "openai-compatible": { apiKey: "", baseURL: "http://localhost:1234/v1", models: [""], knowledgeGraphModel: "" },
+  const [savedByokProvider, setSavedByokProvider] = useState<{
+    flavor: LlmProviderFlavor
+    apiKey?: string
+    baseURL?: string
+    headers?: Record<string, string>
+  }>({ flavor: "openai" })
+  const [providerConfigs, setProviderConfigs] = useState<Record<LlmProviderFlavor, ByokProviderConfig>>({
+    openai: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
+    anthropic: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
+    google: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
+    openrouter: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
+    aigateway: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
+    ollama: { apiKey: "", baseURL: "http://localhost:11434", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
+    "openai-compatible": { apiKey: "", baseURL: "http://localhost:1234/v1", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
+  })
+  const [accountConfigs, setAccountConfigs] = useState<Record<AccountProviderMode, AccountProviderConfig>>({
+    rowboat: { models: ["gpt-5.4"], knowledgeGraphModel: "gpt-5.4-mini", meetingNotesModel: "gpt-5.4" },
+    "chatgpt-codex": { models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
   })
   const [modelsCatalog, setModelsCatalog] = useState<Record<string, LlmModelOption[]>>({})
+  const [catalogMeta, setCatalogMeta] = useState<Record<string, ProviderCatalogMeta>>({})
   const [modelsLoading, setModelsLoading] = useState(false)
   const [modelsError, setModelsError] = useState<string | null>(null)
   const [testState, setTestState] = useState<{ status: "idle" | "testing" | "success" | "error"; error?: string }>({ status: "idle" })
   const [configLoading, setConfigLoading] = useState(true)
   const [showMoreProviders, setShowMoreProviders] = useState(false)
 
-  const activeConfig = providerConfigs[provider]
+  const activeByokConfig = providerConfigs[provider]
+  const activeAccountMode = providerMode === "byok" ? null : providerMode
+  const activeAccountConfig = activeAccountMode ? accountConfigs[activeAccountMode] : null
+  const activeModels = activeAccountConfig?.models ?? activeByokConfig.models
+  const primaryModel = activeModels[0] || ""
+  const accountStatus = activeAccountMode ? connectors.providerStatus[activeAccountMode] : undefined
+  const accountState = activeAccountMode ? connectors.providerStates[activeAccountMode] || {
+    isConnected: false,
+    isLoading: connectors.providersLoading,
+    isConnecting: false,
+  } : null
+  const selectedCatalogMode = providerMode === "byok" ? "byok" : providerMode
+  const selectedCatalogMeta = catalogMeta[selectedCatalogMode] || {}
   const showApiKey = provider === "openai" || provider === "anthropic" || provider === "google" || provider === "openrouter" || provider === "aigateway" || provider === "openai-compatible"
   const requiresApiKey = provider === "openai" || provider === "anthropic" || provider === "google" || provider === "openrouter" || provider === "aigateway"
   const showBaseURL = provider === "ollama" || provider === "openai-compatible" || provider === "aigateway"
   const requiresBaseURL = provider === "ollama" || provider === "openai-compatible"
   const isLocalProvider = provider === "ollama" || provider === "openai-compatible"
-  const modelsForProvider = modelsCatalog[provider] || []
-  const showModelInput = isLocalProvider || modelsForProvider.length === 0
+  const modelsForProvider = modelsCatalog[selectedCatalogMode] || []
+  const showModelInput = providerMode === "byok" && (isLocalProvider || modelsForProvider.length === 0)
   const isMoreProvider = moreProviders.some(p => p.id === provider)
-
-  const primaryModel = activeConfig.models[0] || ""
   const canTest =
+    providerMode === "byok" &&
     primaryModel.trim().length > 0 &&
-    (!requiresApiKey || activeConfig.apiKey.trim().length > 0) &&
-    (!requiresBaseURL || activeConfig.baseURL.trim().length > 0)
+    (!requiresApiKey || activeByokConfig.apiKey.trim().length > 0) &&
+    (!requiresBaseURL || activeByokConfig.baseURL.trim().length > 0)
+  const canSaveAccountMode =
+    providerMode !== "byok" &&
+    !!accountState?.isConnected &&
+    primaryModel.trim().length > 0
+  const showAccountConfigMessage = providerMode !== "byok" && !accountState?.isConnected
 
   const updateConfig = useCallback(
-    (prov: LlmProviderFlavor, updates: Partial<{ apiKey: string; baseURL: string; models: string[]; knowledgeGraphModel: string }>) => {
+    (prov: LlmProviderFlavor, updates: Partial<ByokProviderConfig>) => {
       setProviderConfigs(prev => ({
         ...prev,
         [prov]: { ...prev[prov], ...updates },
@@ -240,33 +299,67 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
   )
 
   const updateModelAt = useCallback(
-    (prov: LlmProviderFlavor, index: number, value: string) => {
-      setProviderConfigs(prev => {
-        const models = [...prev[prov].models]
-        models[index] = value
-        return { ...prev, [prov]: { ...prev[prov], models } }
-      })
+    (index: number, value: string) => {
+      if (providerMode === "byok") {
+        setProviderConfigs(prev => {
+          const models = [...prev[provider].models]
+          models[index] = value
+          return { ...prev, [provider]: { ...prev[provider], models } }
+        })
+      } else {
+        setAccountConfigs(prev => {
+          const current = prev[providerMode]
+          const models = [...current.models]
+          models[index] = value
+          return { ...prev, [providerMode]: { ...current, models } }
+        })
+      }
       setTestState({ status: "idle" })
     },
-    []
+    [provider, providerMode]
   )
 
   const addModel = useCallback(
-    (prov: LlmProviderFlavor) => {
-      setProviderConfigs(prev => ({
+    () => {
+      if (providerMode === "byok") {
+        setProviderConfigs(prev => ({
+          ...prev,
+          [provider]: { ...prev[provider], models: [...prev[provider].models, ""] },
+        }))
+        return
+      }
+      setAccountConfigs(prev => ({
         ...prev,
-        [prov]: { ...prev[prov], models: [...prev[prov].models, ""] },
+        [providerMode]: { ...prev[providerMode], models: [...prev[providerMode].models, ""] },
       }))
     },
-    []
+    [provider, providerMode]
   )
 
   const removeModel = useCallback(
-    (prov: LlmProviderFlavor, index: number) => {
-      setProviderConfigs(prev => {
-        const models = prev[prov].models.filter((_, i) => i !== index)
-        return { ...prev, [prov]: { ...prev[prov], models: models.length > 0 ? models : [""] } }
-      })
+    (index: number) => {
+      if (providerMode === "byok") {
+        setProviderConfigs(prev => {
+          const models = prev[provider].models.filter((_, i) => i !== index)
+          return { ...prev, [provider]: { ...prev[provider], models: models.length > 0 ? models : [""] } }
+        })
+      } else {
+        setAccountConfigs(prev => {
+          const models = prev[providerMode].models.filter((_, i) => i !== index)
+          return { ...prev, [providerMode]: { ...prev[providerMode], models: models.length > 0 ? models : [""] } }
+        })
+      }
+      setTestState({ status: "idle" })
+    },
+    [provider, providerMode]
+  )
+
+  const updateAccountConfig = useCallback(
+    (prov: AccountProviderMode, updates: Partial<AccountProviderConfig>) => {
+      setAccountConfigs(prev => ({
+        ...prev,
+        [prov]: { ...prev[prov], ...updates },
+      }))
       setTestState({ status: "idle" })
     },
     []
@@ -283,10 +376,18 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
           path: "config/models.json",
         })
         const parsed = JSON.parse(result.data)
-        if (parsed?.provider?.flavor && parsed?.model) {
+        if (parsed?.provider?.flavor) {
+          const savedMode = (parsed.providerMode || "byok") as ProviderMode
           const flavor = parsed.provider.flavor as LlmProviderFlavor
+          setProviderMode(savedMode)
           setProvider(flavor)
-          setDefaultProvider(flavor)
+          setSavedByokProvider({
+            flavor,
+            apiKey: parsed.provider.apiKey,
+            baseURL: parsed.provider.baseURL,
+            headers: parsed.provider.headers,
+          })
+          setDefaultProvider(savedMode === "byok" ? flavor : null)
           setProviderConfigs(prev => {
             const next = { ...prev };
             // Hydrate all saved providers from the providers map
@@ -302,13 +403,12 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
                     baseURL: e.baseURL || (defaultBaseURLs[key as LlmProviderFlavor] || ""),
                     models: savedModels,
                     knowledgeGraphModel: e.knowledgeGraphModel || "",
+                    meetingNotesModel: e.meetingNotesModel || "",
                   };
                 }
               }
             }
-            // Active provider takes precedence from top-level config,
-            // but only if it exists in the providers map (wasn't deleted)
-            if (parsed.providers?.[flavor]) {
+            if (savedMode === "byok" && parsed.providers?.[flavor]) {
               const existingModels = next[flavor].models;
               const activeModels = existingModels[0] === parsed.model
                 ? existingModels
@@ -318,10 +418,23 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
                 baseURL: parsed.provider.baseURL || (defaultBaseURLs[flavor] || ""),
                 models: activeModels.length > 0 ? activeModels : [""],
                 knowledgeGraphModel: parsed.knowledgeGraphModel || "",
+                meetingNotesModel: parsed.meetingNotesModel || "",
               };
             }
             return next;
           })
+          if (savedMode !== "byok") {
+            setAccountConfigs(prev => ({
+              ...prev,
+              [savedMode]: {
+                models: Array.isArray(parsed.models) && parsed.models.length > 0
+                  ? parsed.models
+                  : parsed.model ? [parsed.model] : prev[savedMode].models,
+                knowledgeGraphModel: parsed.knowledgeGraphModel || prev[savedMode].knowledgeGraphModel,
+                meetingNotesModel: parsed.meetingNotesModel || prev[savedMode].meetingNotesModel,
+              },
+            }))
+          }
         }
       } catch {
         // No existing config or parse error - use defaults
@@ -341,22 +454,28 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
       try {
         setModelsLoading(true)
         setModelsError(null)
-        const result = await window.ipc.invoke("models:list", null)
+        const result = await window.ipc.invoke("models:list", {
+          mode: selectedCatalogMode,
+        })
         const catalog: Record<string, LlmModelOption[]> = {}
+        const nextCatalogMeta: Record<string, ProviderCatalogMeta> = {}
         for (const p of result.providers || []) {
           catalog[p.id] = p.models || []
+          nextCatalogMeta[p.id] = p.meta || {}
         }
         setModelsCatalog(catalog)
+        setCatalogMeta(nextCatalogMeta)
       } catch {
         setModelsError("Failed to load models list")
         setModelsCatalog({})
+        setCatalogMeta({})
       } finally {
         setModelsLoading(false)
       }
     }
 
     loadModels()
-  }, [dialogOpen])
+  }, [dialogOpen, selectedCatalogMode])
 
   // Set default models from catalog when catalog loads
   useEffect(() => {
@@ -377,25 +496,74 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
     })
   }, [modelsCatalog])
 
+  useEffect(() => {
+    if (providerMode === "byok") return
+    const models = modelsCatalog[providerMode] || []
+    if (models.length === 0) return
+    const meta = catalogMeta[providerMode] || {}
+    const validIds = new Set(models.map((model) => model.id))
+    const defaultModel = meta.defaultModel || models[0]?.id || ""
+    const defaultKnowledgeGraphModel = meta.defaultKnowledgeGraphModel
+      || models.find((model) => model.id.toLowerCase().includes("mini"))?.id
+      || defaultModel
+    const defaultMeetingNotesModel = meta.defaultMeetingNotesModel || defaultKnowledgeGraphModel
+    setAccountConfigs(prev => {
+      const current = prev[providerMode]
+      const normalizedModels = [...new Set(
+        current.models
+          .map((model) => model.trim())
+          .filter(Boolean)
+          .filter((model) => validIds.has(model))
+      )]
+      const nextModels = normalizedModels.length > 0 ? normalizedModels : [defaultModel]
+      const nextKnowledgeGraphModel = current.knowledgeGraphModel && validIds.has(current.knowledgeGraphModel)
+        ? current.knowledgeGraphModel
+        : defaultKnowledgeGraphModel
+      const nextMeetingNotesModel = current.meetingNotesModel && validIds.has(current.meetingNotesModel)
+        ? current.meetingNotesModel
+        : defaultMeetingNotesModel
+
+      if (
+        JSON.stringify(nextModels) === JSON.stringify(current.models) &&
+        nextKnowledgeGraphModel === current.knowledgeGraphModel &&
+        nextMeetingNotesModel === current.meetingNotesModel
+      ) {
+        return prev
+      }
+      return {
+        ...prev,
+        [providerMode]: {
+          ...current,
+          models: nextModels,
+          knowledgeGraphModel: nextKnowledgeGraphModel,
+          meetingNotesModel: nextMeetingNotesModel,
+        },
+      }
+    })
+  }, [catalogMeta, modelsCatalog, providerMode])
+
   const handleTestAndSave = useCallback(async () => {
     if (!canTest) return
     setTestState({ status: "testing" })
     try {
-      const allModels = activeConfig.models.map(m => m.trim()).filter(Boolean)
+      const allModels = activeByokConfig.models.map(m => m.trim()).filter(Boolean)
       const providerConfig = {
+        providerMode: "byok" as const,
         provider: {
           flavor: provider,
-          apiKey: activeConfig.apiKey.trim() || undefined,
-          baseURL: activeConfig.baseURL.trim() || undefined,
+          apiKey: activeByokConfig.apiKey.trim() || undefined,
+          baseURL: activeByokConfig.baseURL.trim() || undefined,
         },
         model: allModels[0] || "",
         models: allModels,
-        knowledgeGraphModel: activeConfig.knowledgeGraphModel.trim() || undefined,
+        knowledgeGraphModel: activeByokConfig.knowledgeGraphModel.trim() || undefined,
+        meetingNotesModel: activeByokConfig.meetingNotesModel.trim() || undefined,
       }
       const result = await window.ipc.invoke("models:test", providerConfig)
       if (result.success) {
         await window.ipc.invoke("models:saveConfig", providerConfig)
         setDefaultProvider(provider)
+        setSavedByokProvider(providerConfig.provider)
         setTestState({ status: "success" })
         window.dispatchEvent(new Event('models-config-changed'))
         toast.success("Model configuration saved")
@@ -407,7 +575,29 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
       setTestState({ status: "error", error: "Connection test failed" })
       toast.error("Connection test failed")
     }
-  }, [canTest, provider, activeConfig])
+  }, [canTest, provider, activeByokConfig])
+
+  const handleSaveAccountMode = useCallback(async () => {
+    if (!canSaveAccountMode || !activeAccountMode || !activeAccountConfig) return
+    setTestState({ status: "testing" })
+    try {
+      const models = activeAccountConfig.models.map(m => m.trim()).filter(Boolean)
+      await window.ipc.invoke("models:saveConfig", {
+        providerMode: activeAccountMode,
+        provider: savedByokProvider,
+        model: models[0] || "",
+        models,
+        knowledgeGraphModel: activeAccountConfig.knowledgeGraphModel.trim() || undefined,
+        meetingNotesModel: activeAccountConfig.meetingNotesModel.trim() || undefined,
+      })
+      setTestState({ status: "success" })
+      window.dispatchEvent(new Event('models-config-changed'))
+      toast.success("Model provider saved")
+    } catch {
+      setTestState({ status: "error", error: "Failed to save model provider" })
+      toast.error("Failed to save model provider")
+    }
+  }, [activeAccountConfig, activeAccountMode, canSaveAccountMode, savedByokProvider])
 
   const handleSetDefault = useCallback(async (prov: LlmProviderFlavor) => {
     const config = providerConfigs[prov]
@@ -415,6 +605,7 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
     if (!allModels[0]) return
     try {
       await window.ipc.invoke("models:saveConfig", {
+        providerMode: "byok" as const,
         provider: {
           flavor: prov,
           apiKey: config.apiKey.trim() || undefined,
@@ -423,8 +614,15 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
         model: allModels[0],
         models: allModels,
         knowledgeGraphModel: config.knowledgeGraphModel.trim() || undefined,
+        meetingNotesModel: config.meetingNotesModel.trim() || undefined,
       })
+      setProviderMode("byok")
       setDefaultProvider(prov)
+      setSavedByokProvider({
+        flavor: prov,
+        apiKey: config.apiKey.trim() || undefined,
+        baseURL: config.baseURL.trim() || undefined,
+      })
       window.dispatchEvent(new Event('models-config-changed'))
       toast.success("Default provider updated")
     } catch {
@@ -439,11 +637,10 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
       if (parsed?.providers?.[prov]) {
         delete parsed.providers[prov]
       }
-      // If the deleted provider is the current top-level active one,
-      // switch top-level config to the current default provider
-      if (parsed?.provider?.flavor === prov && defaultProvider && defaultProvider !== prov) {
+      if (parsed?.providerMode === "byok" && parsed?.provider?.flavor === prov && defaultProvider && defaultProvider !== prov) {
         const defConfig = providerConfigs[defaultProvider]
         const defModels = defConfig.models.map(m => m.trim()).filter(Boolean)
+        parsed.providerMode = "byok"
         parsed.provider = {
           flavor: defaultProvider,
           apiKey: defConfig.apiKey.trim() || undefined,
@@ -452,6 +649,7 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
         parsed.model = defModels[0] || ""
         parsed.models = defModels
         parsed.knowledgeGraphModel = defConfig.knowledgeGraphModel.trim() || undefined
+        parsed.meetingNotesModel = defConfig.meetingNotesModel.trim() || undefined
       }
       await window.ipc.invoke("workspace:writeFile", {
         path: "config/models.json",
@@ -459,7 +657,7 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
       })
       setProviderConfigs(prev => ({
         ...prev,
-        [prov]: { apiKey: "", baseURL: defaultBaseURLs[prov] || "", models: [""], knowledgeGraphModel: "" },
+        [prov]: { apiKey: "", baseURL: defaultBaseURLs[prov] || "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
       }))
       setTestState({ status: "idle" })
       window.dispatchEvent(new Event('models-config-changed'))
@@ -470,13 +668,14 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
   }, [defaultProvider, providerConfigs])
 
   const renderProviderCard = (p: { id: LlmProviderFlavor; name: string; description: string }) => {
-    const isDefault = defaultProvider === p.id
-    const isSelected = provider === p.id
+    const isDefault = providerMode === "byok" && defaultProvider === p.id
+    const isSelected = providerMode === "byok" && provider === p.id
     const hasModel = providerConfigs[p.id].models[0]?.trim().length > 0
     return (
       <button
         key={p.id}
         onClick={() => {
+          setProviderMode("byok")
           setProvider(p.id)
           setTestState({ status: "idle" })
         }}
@@ -524,6 +723,54 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
     )
   }
 
+  const renderAccountProviderCard = (p: { id: AccountProviderMode; name: string; description: string }) => {
+    const state = connectors.providerStates[p.id] || {
+      isConnected: false,
+      isLoading: connectors.providersLoading,
+      isConnecting: false,
+    }
+    const status = connectors.providerStatus[p.id]
+    const isSelected = providerMode === p.id
+    const isDefault = providerMode === p.id
+
+    return (
+      <button
+        key={p.id}
+        onClick={() => {
+          setProviderMode(p.id)
+          setTestState({ status: "idle" })
+        }}
+        className={cn(
+          "rounded-md border px-3 py-2.5 text-left transition-colors relative",
+          isSelected
+            ? "border-primary bg-primary/5"
+            : "border-border hover:bg-accent"
+        )}
+      >
+        <div className="flex items-center gap-1.5">
+          <span className="text-sm font-medium">{p.name}</span>
+          {isDefault && (
+            <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-primary">
+              Active
+            </span>
+          )}
+        </div>
+        <div className="mt-0.5 text-xs text-muted-foreground">{p.description}</div>
+        <div className="mt-1.5 text-[11px]">
+          {state.isLoading ? (
+            <span className="text-muted-foreground">Checking connection...</span>
+          ) : state.isConnected ? (
+            <span className="text-emerald-600">
+              {[status?.email, status?.planType].filter(Boolean).join(" · ") || "Connected"}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">Not connected</span>
+          )}
+        </div>
+      </button>
+    )
+  }
+
   if (configLoading) {
     return (
       <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
@@ -538,6 +785,10 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
       {/* Provider selection */}
       <div className="space-y-2">
         <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Provider</span>
+        <div className="grid gap-2 grid-cols-2">
+          {accountProviders.map(renderAccountProviderCard)}
+        </div>
+        <div className="h-px bg-border my-2" />
         <div className="grid gap-2 grid-cols-2">
           {primaryProviders.map(renderProviderCard)}
         </div>
@@ -565,20 +816,24 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
               <Loader2 className="size-4 animate-spin" />
               Loading...
             </div>
+          ) : showAccountConfigMessage ? (
+            <div className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">
+              Connect {activeAccountMode === "rowboat" ? "your Rowboat account" : "ChatGPT / Codex"} to choose models.
+            </div>
           ) : (
             <div className="space-y-2">
-              {activeConfig.models.map((model, index) => (
+              {activeModels.map((model, index) => (
                 <div key={index} className="group/model relative">
                   {showModelInput ? (
                     <Input
                       value={model}
-                      onChange={(e) => updateModelAt(provider, index, e.target.value)}
+                      onChange={(e) => updateModelAt(index, e.target.value)}
                       placeholder="Enter model"
                     />
                   ) : (
                     <Select
                       value={model}
-                      onValueChange={(value) => updateModelAt(provider, index, value)}
+                      onValueChange={(value) => updateModelAt(index, value)}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Select a model" />
@@ -592,9 +847,9 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
                       </SelectContent>
                     </Select>
                   )}
-                  {activeConfig.models.length > 1 && (
+                  {activeModels.length > 1 && (
                     <button
-                      onClick={() => removeModel(provider, index)}
+                      onClick={() => removeModel(index)}
                       className="absolute right-8 top-1/2 -translate-y-1/2 flex size-6 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/model:opacity-100"
                     >
                       <X className="size-3.5" />
@@ -603,7 +858,7 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
                 </div>
               ))}
               <button
-                onClick={() => addModel(provider)}
+                onClick={addModel}
                 className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
               >
                 <Plus className="size-3.5" />
@@ -624,16 +879,26 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
               <Loader2 className="size-4 animate-spin" />
               Loading...
             </div>
+          ) : showAccountConfigMessage ? (
+            <div className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">
+              Model choices unlock after account connection.
+            </div>
           ) : showModelInput ? (
             <Input
-              value={activeConfig.knowledgeGraphModel}
+              value={activeByokConfig.knowledgeGraphModel}
               onChange={(e) => updateConfig(provider, { knowledgeGraphModel: e.target.value })}
               placeholder={primaryModel || "Enter model"}
             />
           ) : (
             <Select
-              value={activeConfig.knowledgeGraphModel || "__same__"}
-              onValueChange={(value) => updateConfig(provider, { knowledgeGraphModel: value === "__same__" ? "" : value })}
+              value={(providerMode === "byok" ? activeByokConfig.knowledgeGraphModel : activeAccountConfig?.knowledgeGraphModel) || "__same__"}
+              onValueChange={(value) => {
+                if (providerMode === "byok") {
+                  updateConfig(provider, { knowledgeGraphModel: value === "__same__" ? "" : value })
+                } else if (activeAccountMode) {
+                  updateAccountConfig(activeAccountMode, { knowledgeGraphModel: value === "__same__" ? "" : value })
+                }
+              }}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Select a model" />
@@ -651,15 +916,73 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
         </div>
       </div>
 
+      {providerMode === "chatgpt-codex" && (selectedCatalogMeta.invalidSavedModels?.length || selectedCatalogMeta.catalogSource === "fallback") && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+          {selectedCatalogMeta.invalidSavedModels?.length
+            ? "Previously saved ChatGPT / Codex models are no longer available. Review the refreshed model choices and save again."
+            : "Live ChatGPT / Codex catalog could not be fetched. Showing the built-in fallback model list."}
+        </div>
+      )}
+
+      {providerMode !== "byok" && activeAccountMode && (
+        <div className="space-y-3 rounded-lg border px-4 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium">{activeAccountMode === "rowboat" ? "Rowboat account" : "ChatGPT / Codex account"}</div>
+              {accountState?.isLoading ? (
+                <div className="text-xs text-muted-foreground">Checking connection...</div>
+              ) : accountState?.isConnected ? (
+                <div className="text-xs text-muted-foreground">
+                  {[accountStatus?.email, accountStatus?.planType].filter(Boolean).join(" · ") || "Connected"}
+                </div>
+              ) : (
+                <div className="text-xs text-muted-foreground">Not connected</div>
+              )}
+            </div>
+            <div className="flex gap-2">
+              {accountState?.isConnected ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => connectors.handleDisconnect(activeAccountMode)}
+                >
+                  {activeAccountMode === "rowboat" ? "Log Out" : "Disconnect"}
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    size="sm"
+                    onClick={() => connectors.handleConnect(activeAccountMode)}
+                    disabled={accountState?.isConnecting}
+                  >
+                    {accountState?.isConnecting ? <Loader2 className="size-4 animate-spin" /> : (activeAccountMode === "rowboat" ? "Sign In" : "Connect")}
+                  </Button>
+                  {activeAccountMode === "chatgpt-codex" && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => connectors.startDeviceConnect("chatgpt-codex")}
+                      disabled={accountState?.isConnecting}
+                    >
+                      Device code
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* API Key */}
-      {showApiKey && (
+      {providerMode === "byok" && showApiKey && (
         <div className="space-y-2">
           <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
             {provider === "openai-compatible" ? "API Key (optional)" : "API Key"}
           </span>
           <Input
             type="password"
-            value={activeConfig.apiKey}
+            value={activeByokConfig.apiKey}
             onChange={(e) => updateConfig(provider, { apiKey: e.target.value })}
             placeholder="Paste your API key"
           />
@@ -667,11 +990,11 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
       )}
 
       {/* Base URL */}
-      {showBaseURL && (
+      {providerMode === "byok" && showBaseURL && (
         <div className="space-y-2">
           <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Base URL</span>
           <Input
-            value={activeConfig.baseURL}
+            value={activeByokConfig.baseURL}
             onChange={(e) => updateConfig(provider, { baseURL: e.target.value })}
             placeholder={
               provider === "ollama"
@@ -693,20 +1016,20 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
       {testState.status === "success" && (
         <div className="flex items-center gap-1.5 text-sm text-green-600">
           <CheckCircle2 className="size-4" />
-          Connected and saved
+          {providerMode === "byok" ? "Connected and saved" : "Saved"}
         </div>
       )}
 
       {/* Test & Save button */}
       <Button
-        onClick={handleTestAndSave}
-        disabled={!canTest || testState.status === "testing"}
+        onClick={providerMode === "byok" ? handleTestAndSave : handleSaveAccountMode}
+        disabled={(providerMode === "byok" ? !canTest : !canSaveAccountMode) || testState.status === "testing"}
         className="w-full"
       >
         {testState.status === "testing" ? (
-          <><Loader2 className="size-4 animate-spin mr-2" />Testing connection...</>
+          <><Loader2 className="size-4 animate-spin mr-2" />{providerMode === "byok" ? "Testing connection..." : "Saving..."}</>
         ) : (
-          "Test & Save"
+          providerMode === "byok" ? "Test & Save" : "Save"
         )}
       </Button>
     </div>
@@ -1028,126 +1351,6 @@ function ToolsLibrarySettings({ dialogOpen, rowboatConnected }: { dialogOpen: bo
           )}
         </>
       )}
-    </div>
-  )
-}
-
-// --- Rowboat Model Settings (when signed in via Rowboat) ---
-
-function RowboatModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
-  const [gatewayModels, setGatewayModels] = useState<LlmModelOption[]>([])
-  const [selectedModel, setSelectedModel] = useState("")
-  const [selectedKgModel, setSelectedKgModel] = useState("")
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    if (!dialogOpen) return
-
-    async function load() {
-      setLoading(true)
-      try {
-        // Fetch gateway models
-        const listResult = await window.ipc.invoke("models:list", null)
-        const rowboatProvider = listResult.providers?.find((p: { id: string }) => p.id === "rowboat")
-        const models = rowboatProvider?.models || []
-        setGatewayModels(models)
-
-        // Read current selection from config
-        try {
-          const configResult = await window.ipc.invoke("workspace:readFile", { path: "config/models.json" })
-          const parsed = JSON.parse(configResult.data)
-          if (parsed?.model) setSelectedModel(parsed.model)
-          if (parsed?.knowledgeGraphModel) setSelectedKgModel(parsed.knowledgeGraphModel)
-        } catch {
-          // No config yet — pick first model as default
-          if (models.length > 0) setSelectedModel(models[0].id)
-        }
-      } catch {
-        toast.error("Failed to load models")
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    load()
-  }, [dialogOpen])
-
-  const handleSave = useCallback(async () => {
-    if (!selectedModel) return
-    setSaving(true)
-    try {
-      await window.ipc.invoke("models:saveConfig", {
-        provider: { flavor: "openrouter" as const },
-        model: selectedModel,
-        knowledgeGraphModel: selectedKgModel || undefined,
-      })
-      window.dispatchEvent(new Event("models-config-changed"))
-      toast.success("Model configuration saved")
-    } catch {
-      toast.error("Failed to save model configuration")
-    } finally {
-      setSaving(false)
-    }
-  }, [selectedModel, selectedKgModel])
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12 text-muted-foreground">
-        <Loader2 className="size-5 animate-spin" />
-      </div>
-    )
-  }
-
-  return (
-    <div className="space-y-6">
-      <p className="text-sm text-muted-foreground">
-        Select the models Rowboat uses. These are provided through your Rowboat account.
-      </p>
-
-      {/* Assistant model */}
-      <div className="space-y-2">
-        <label className="text-sm font-medium">Assistant model</label>
-        <Select value={selectedModel} onValueChange={setSelectedModel}>
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder="Select a model" />
-          </SelectTrigger>
-          <SelectContent>
-            {gatewayModels.map((m) => (
-              <SelectItem key={m.id} value={m.id}>
-                {m.name || m.id}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {/* Knowledge graph model */}
-      <div className="space-y-2">
-        <label className="text-sm font-medium">Knowledge graph model</label>
-        <Select value={selectedKgModel || "__same__"} onValueChange={(v) => setSelectedKgModel(v === "__same__" ? "" : v)}>
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder="Same as assistant" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__same__">Same as assistant</SelectItem>
-            {gatewayModels.map((m) => (
-              <SelectItem key={m.id} value={m.id}>
-                {m.name || m.id}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {/* Save */}
-      <Button onClick={handleSave} disabled={!selectedModel || saving}>
-        {saving ? (
-          <><Loader2 className="size-4 animate-spin mr-2" />Saving...</>
-        ) : (
-          "Save"
-        )}
-      </Button>
     </div>
   )
 }
@@ -1515,7 +1718,7 @@ export function SettingsDialog({ children }: SettingsDialogProps) {
     })
   }, [open])
 
-  const visibleTabs = useMemo(() => rowboatConnected ? tabs.filter(t => t.id !== "models") : tabs, [rowboatConnected])
+  const visibleTabs = tabs
 
   const activeTabConfig = visibleTabs.find((t) => t.id === activeTab) ?? visibleTabs[0]
   const isJsonTab = activeTab === "mcp" || activeTab === "security"
@@ -1630,9 +1833,7 @@ export function SettingsDialog({ children }: SettingsDialogProps) {
             <div className="px-4 py-3 border-b">
               <h3 className="font-medium text-sm">{activeTabConfig.label}</h3>
               <p className="text-xs text-muted-foreground mt-0.5">
-                {activeTab === "models" && rowboatConnected
-                  ? "Select your default models"
-                  : activeTabConfig.description}
+                {activeTabConfig.description}
               </p>
             </div>
 
@@ -1643,9 +1844,7 @@ export function SettingsDialog({ children }: SettingsDialogProps) {
               ) : activeTab === "connected-accounts" ? (
                 <ConnectedAccountsSettings dialogOpen={open} />
               ) : activeTab === "models" ? (
-                rowboatConnected
-                  ? <RowboatModelSettings dialogOpen={open} />
-                  : <ModelSettings dialogOpen={open} />
+                <ModelSettings dialogOpen={open} />
               ) : activeTab === "note-tagging" ? (
                 <NoteTaggingSettings dialogOpen={open} />
               ) : activeTab === "appearance" ? (

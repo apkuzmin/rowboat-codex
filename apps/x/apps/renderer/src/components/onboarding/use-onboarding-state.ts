@@ -11,6 +11,8 @@ export interface ProviderState {
 export type Step = 0 | 1 | 2 | 3
 
 export type OnboardingPath = 'rowboat' | 'chatgpt-codex' | 'byok' | null
+export type LlmProviderMode = 'byok' | 'chatgpt-codex'
+type AccountProviderMode = Exclude<LlmProviderMode, 'byok'>
 
 export type LlmProviderFlavor = "openai" | "anthropic" | "google" | "openrouter" | "aigateway" | "ollama" | "openai-compatible"
 
@@ -20,13 +22,23 @@ export interface LlmModelOption {
   release_date?: string
 }
 
+interface ProviderCatalogMeta {
+  catalogSource?: 'discovered' | 'fallback'
+  invalidSavedModels?: string[]
+  defaultModel?: string
+  defaultKnowledgeGraphModel?: string
+  defaultMeetingNotesModel?: string
+}
+
 export function useOnboardingState(open: boolean, onComplete: () => void) {
   const [currentStep, setCurrentStep] = useState<Step>(0)
   const [onboardingPath, setOnboardingPath] = useState<OnboardingPath>(null)
 
   // LLM setup state
+  const [llmProviderMode, setLlmProviderMode] = useState<LlmProviderMode>("byok")
   const [llmProvider, setLlmProvider] = useState<LlmProviderFlavor>("openai")
   const [modelsCatalog, setModelsCatalog] = useState<Record<string, LlmModelOption[]>>({})
+  const [catalogMeta, setCatalogMeta] = useState<Record<string, ProviderCatalogMeta>>({})
   const [modelsLoading, setModelsLoading] = useState(false)
   const [modelsError, setModelsError] = useState<string | null>(null)
   const [providerConfigs, setProviderConfigs] = useState<Record<LlmProviderFlavor, { apiKey: string; baseURL: string; model: string; knowledgeGraphModel: string }>>({
@@ -38,6 +50,9 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
     ollama: { apiKey: "", baseURL: "http://localhost:11434", model: "", knowledgeGraphModel: "" },
     "openai-compatible": { apiKey: "", baseURL: "http://localhost:1234/v1", model: "", knowledgeGraphModel: "" },
   })
+  const [accountProviderConfigs, setAccountProviderConfigs] = useState<Record<AccountProviderMode, { model: string; knowledgeGraphModel: string }>>({
+    'chatgpt-codex': { model: "", knowledgeGraphModel: "" },
+  })
   const [testState, setTestState] = useState<{ status: "idle" | "testing" | "success" | "error"; error?: string }>({
     status: "idle",
   })
@@ -47,6 +62,7 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
   const [providers, setProviders] = useState<string[]>([])
   const [providersLoading, setProvidersLoading] = useState(true)
   const [providerStates, setProviderStates] = useState<Record<string, ProviderState>>({})
+  const [providerStatus, setProviderStatus] = useState<Record<string, { email?: string | null; planType?: string | null; error?: string | null }>>({})
   const [googleClientIdOpen, setGoogleClientIdOpen] = useState(false)
 
   // Granola state
@@ -91,16 +107,41 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
     []
   )
 
-  const activeConfig = providerConfigs[llmProvider]
-  const showApiKey = llmProvider === "openai" || llmProvider === "anthropic" || llmProvider === "google" || llmProvider === "openrouter" || llmProvider === "aigateway" || llmProvider === "openai-compatible"
-  const requiresApiKey = llmProvider === "openai" || llmProvider === "anthropic" || llmProvider === "google" || llmProvider === "openrouter" || llmProvider === "aigateway"
-  const requiresBaseURL = llmProvider === "ollama" || llmProvider === "openai-compatible"
-  const showBaseURL = llmProvider === "ollama" || llmProvider === "openai-compatible" || llmProvider === "aigateway"
-  const isLocalProvider = llmProvider === "ollama" || llmProvider === "openai-compatible"
+  const updateAccountProviderConfig = useCallback(
+    (provider: AccountProviderMode, updates: Partial<{ model: string; knowledgeGraphModel: string }>) => {
+      setAccountProviderConfigs(prev => ({
+        ...prev,
+        [provider]: { ...prev[provider], ...updates },
+      }))
+      setTestState({ status: "idle" })
+    },
+    []
+  )
+
+  const activeConfig = llmProviderMode === "byok"
+    ? providerConfigs[llmProvider]
+    : accountProviderConfigs[llmProviderMode]
+  const activeApiKey =
+    "apiKey" in activeConfig && typeof activeConfig.apiKey === "string"
+      ? activeConfig.apiKey
+      : ""
+  const activeBaseURL =
+    "baseURL" in activeConfig && typeof activeConfig.baseURL === "string"
+      ? activeConfig.baseURL
+      : ""
+  const showApiKey = llmProviderMode === "byok" && (llmProvider === "openai" || llmProvider === "anthropic" || llmProvider === "google" || llmProvider === "openrouter" || llmProvider === "aigateway" || llmProvider === "openai-compatible")
+  const requiresApiKey = llmProviderMode === "byok" && (llmProvider === "openai" || llmProvider === "anthropic" || llmProvider === "google" || llmProvider === "openrouter" || llmProvider === "aigateway")
+  const requiresBaseURL = llmProviderMode === "byok" && (llmProvider === "ollama" || llmProvider === "openai-compatible")
+  const showBaseURL = llmProviderMode === "byok" && (llmProvider === "ollama" || llmProvider === "openai-compatible" || llmProvider === "aigateway")
+  const isLocalProvider = llmProviderMode === "byok" && (llmProvider === "ollama" || llmProvider === "openai-compatible")
   const canTest =
     activeConfig.model.trim().length > 0 &&
-    (!requiresApiKey || activeConfig.apiKey.trim().length > 0) &&
-    (!requiresBaseURL || activeConfig.baseURL.trim().length > 0)
+    (!requiresApiKey || activeApiKey.trim().length > 0) &&
+    (!requiresBaseURL || activeBaseURL.trim().length > 0)
+  const canSaveAccountProvider =
+    llmProviderMode !== "byok" &&
+    activeConfig.model.trim().length > 0 &&
+    !!providerStates[llmProviderMode]?.isConnected
 
   // Track connected providers for the completion step
   const connectedProviders = Object.entries(providerStates)
@@ -152,23 +193,27 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
       try {
         setModelsLoading(true)
         setModelsError(null)
-        const result = await window.ipc.invoke("models:list", null)
+        const result = await window.ipc.invoke("models:list", { mode: llmProviderMode })
         const catalog: Record<string, LlmModelOption[]> = {}
+        const nextCatalogMeta: Record<string, ProviderCatalogMeta> = {}
         for (const provider of result.providers || []) {
           catalog[provider.id] = provider.models || []
+          nextCatalogMeta[provider.id] = provider.meta || {}
         }
         setModelsCatalog(catalog)
+        setCatalogMeta(nextCatalogMeta)
       } catch (error) {
         console.error("Failed to load models catalog:", error)
         setModelsError("Failed to load models list")
         setModelsCatalog({})
+        setCatalogMeta({})
       } finally {
         setModelsLoading(false)
       }
     }
 
     loadModels()
-  }, [open])
+  }, [open, llmProviderMode])
 
   // Preferred default models for each provider
   const preferredDefaults: Partial<Record<LlmProviderFlavor, string>> = {
@@ -193,6 +238,30 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
       return next
     })
   }, [modelsCatalog])
+
+  useEffect(() => {
+    if (llmProviderMode === "byok") return
+    const models = modelsCatalog[llmProviderMode]
+    if (!models?.length) return
+    const meta = catalogMeta[llmProviderMode] || {}
+    const validIds = new Set(models.map((model) => model.id))
+    const defaultModel = meta.defaultModel || models[0]?.id || ""
+    const defaultKnowledgeGraphModel = meta.defaultKnowledgeGraphModel
+      || models.find((model) => model.id.toLowerCase().includes('mini'))?.id
+      || defaultModel
+    setAccountProviderConfigs(prev => {
+      const current = prev[llmProviderMode]
+      const nextModel = current.model && validIds.has(current.model) ? current.model : defaultModel
+      const nextKnowledgeGraphModel = current.knowledgeGraphModel && validIds.has(current.knowledgeGraphModel)
+        ? current.knowledgeGraphModel
+        : defaultKnowledgeGraphModel
+      if (nextModel === current.model && nextKnowledgeGraphModel === current.knowledgeGraphModel) return prev
+      return {
+        ...prev,
+        [llmProviderMode]: { ...current, model: nextModel, knowledgeGraphModel: nextKnowledgeGraphModel },
+      }
+    })
+  }, [catalogMeta, llmProviderMode, modelsCatalog])
 
   // Load Granola config
   const refreshGranolaConfig = useCallback(async () => {
@@ -398,10 +467,10 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
   // BYOK path: 0 (welcome) → 1 (llm setup) → 2 (connect) → 3 (done)
   const handleNext = useCallback(() => {
     if (currentStep === 0) {
-      if (onboardingPath === 'byok') {
-        setCurrentStep(1)
-      } else {
+      if (onboardingPath === 'rowboat') {
         setCurrentStep(2)
+      } else {
+        setCurrentStep(1)
       }
     } else if (currentStep === 1) {
       setCurrentStep(2)
@@ -415,7 +484,7 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
       setCurrentStep(0)
       setOnboardingPath(null)
     } else if (currentStep === 2) {
-      if (onboardingPath === 'rowboat' || onboardingPath === 'chatgpt-codex') {
+      if (onboardingPath === 'rowboat') {
         setCurrentStep(0)
       } else {
         setCurrentStep(1)
@@ -428,38 +497,57 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
   }, [onComplete])
 
   const handleTestAndSaveLlmConfig = useCallback(async () => {
-    if (!canTest) return
+    if (llmProviderMode === 'byok' && !canTest) return
+    if (llmProviderMode !== 'byok' && !canSaveAccountProvider) return
     setTestState({ status: "testing" })
     try {
-      const apiKey = activeConfig.apiKey.trim() || undefined
-      const baseURL = activeConfig.baseURL.trim() || undefined
       const model = activeConfig.model.trim()
       const knowledgeGraphModel = activeConfig.knowledgeGraphModel.trim() || undefined
-      const providerConfig = {
-        provider: {
-          flavor: llmProvider,
-          apiKey,
-          baseURL,
-        },
-        model,
-        knowledgeGraphModel,
-      }
-      const result = await window.ipc.invoke("models:test", providerConfig)
-      if (result.success) {
+      if (llmProviderMode === 'byok') {
+        const byokConfig = providerConfigs[llmProvider]
+        const apiKey = byokConfig.apiKey.trim() || undefined
+        const baseURL = byokConfig.baseURL.trim() || undefined
+        const providerConfig = {
+          providerMode: "byok" as const,
+          provider: {
+            flavor: llmProvider,
+            apiKey,
+            baseURL,
+          },
+          model,
+          knowledgeGraphModel,
+        }
+        const result = await window.ipc.invoke("models:test", providerConfig)
+        if (!result.success) {
+          setTestState({ status: "error", error: result.error })
+          toast.error(result.error || "Connection test failed")
+          return
+        }
         setTestState({ status: "success" })
         await window.ipc.invoke("models:saveConfig", providerConfig)
         window.dispatchEvent(new Event('models-config-changed'))
         handleNext()
-      } else {
-        setTestState({ status: "error", error: result.error })
-        toast.error(result.error || "Connection test failed")
+        return
       }
+      await window.ipc.invoke("models:saveConfig", {
+        providerMode: llmProviderMode,
+        provider: {
+          flavor: llmProvider,
+          apiKey: providerConfigs[llmProvider].apiKey.trim() || undefined,
+          baseURL: providerConfigs[llmProvider].baseURL.trim() || undefined,
+        },
+        model,
+        knowledgeGraphModel,
+      })
+      setTestState({ status: "success" })
+      window.dispatchEvent(new Event('models-config-changed'))
+      handleNext()
     } catch (error) {
       console.error("Connection test failed:", error)
       setTestState({ status: "error", error: "Connection test failed" })
       toast.error("Connection test failed")
     }
-  }, [activeConfig.apiKey, activeConfig.baseURL, activeConfig.model, activeConfig.knowledgeGraphModel, canTest, llmProvider, handleNext])
+  }, [activeConfig, canSaveAccountProvider, canTest, handleNext, llmProvider, llmProviderMode, providerConfigs])
 
   // Check connection status for all providers
   const refreshAllStatuses = useCallback(async () => {
@@ -483,13 +571,20 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
     try {
       const result = await window.ipc.invoke('oauth:getState', null)
       const config = result.config || {}
+      const nextStatus: Record<string, { email?: string | null; planType?: string | null; error?: string | null }> = {}
       for (const provider of providers) {
         newStates[provider] = {
           isConnected: config[provider]?.connected ?? false,
           isLoading: false,
           isConnecting: false,
         }
+        nextStatus[provider] = {
+          email: config[provider]?.email ?? null,
+          planType: config[provider]?.planType ?? null,
+          error: config[provider]?.error ?? null,
+        }
       }
+      setProviderStatus(nextStatus)
     } catch (error) {
       console.error('Failed to check connection status for providers:', error)
       for (const provider of providers) {
@@ -499,6 +594,7 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
           isConnecting: false,
         }
       }
+      setProviderStatus({})
     }
 
     setProviderStates(newStates)
@@ -524,6 +620,14 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
           isConnecting: false,
         }
       }))
+      setProviderStatus(prev => ({
+        ...prev,
+        [provider]: {
+          email: event.email ?? prev[provider]?.email ?? null,
+          planType: event.planType ?? prev[provider]?.planType ?? null,
+          error: event.error ?? null,
+        },
+      }))
     })
 
     return cleanup
@@ -531,7 +635,7 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
 
   // Auto-advance from Rowboat sign-in step when OAuth completes
   useEffect(() => {
-    if ((onboardingPath !== 'rowboat' && onboardingPath !== 'chatgpt-codex') || currentStep !== 0) return
+    if (onboardingPath !== 'rowboat' || currentStep !== 0) return
 
     const cleanup = window.ipc.on('oauth:didConnect', async (event) => {
       if (event.provider === onboardingPath && event.success) {
@@ -650,12 +754,16 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
     setOnboardingPath,
 
     // LLM state
+    llmProviderMode,
+    setLlmProviderMode,
     llmProvider,
     setLlmProvider,
     modelsCatalog,
+    catalogMeta,
     modelsLoading,
     modelsError,
     providerConfigs,
+    accountProviderConfigs,
     activeConfig,
     testState,
     setTestState,
@@ -665,15 +773,18 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
     showBaseURL,
     isLocalProvider,
     canTest,
+    canSaveAccountProvider,
     showMoreProviders,
     setShowMoreProviders,
     updateProviderConfig,
+    updateAccountProviderConfig,
     handleTestAndSaveLlmConfig,
 
     // OAuth state
     providers,
     providersLoading,
     providerStates,
+    providerStatus,
     googleClientIdOpen,
     setGoogleClientIdOpen,
     connectedProviders,

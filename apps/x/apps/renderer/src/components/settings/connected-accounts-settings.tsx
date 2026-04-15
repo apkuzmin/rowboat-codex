@@ -7,7 +7,6 @@ import { Separator } from "@/components/ui/separator"
 import { GoogleClientIdModal } from "@/components/google-client-id-modal"
 import { ComposioApiKeyModal } from "@/components/composio-api-key-modal"
 import { useConnectors } from "@/hooks/useConnectors"
-import { OpenAIIcon } from "@/components/onboarding/provider-icons"
 
 interface ConnectedAccountsSettingsProps {
   dialogOpen: boolean
@@ -82,27 +81,6 @@ export function ConnectedAccountsSettings({ dialogOpen }: ConnectedAccountsSetti
             >
               Disconnect
             </Button>
-          ) : provider === 'chatgpt-codex' ? (
-            <div className="flex items-center gap-2">
-              <Button
-                variant="default"
-                size="sm"
-                onClick={() => c.handleConnect(provider)}
-                disabled={state.isConnecting}
-                className="h-7 px-3 text-xs"
-              >
-                {state.isConnecting ? <Loader2 className="size-3 animate-spin" /> : "Connect"}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => c.startDeviceConnect(provider)}
-                disabled={state.isConnecting}
-                className="h-7 px-3 text-xs"
-              >
-                Device code
-              </Button>
-            </div>
           ) : (
             <Button
               variant="default"
@@ -153,18 +131,6 @@ export function ConnectedAccountsSettings({ dialogOpen }: ConnectedAccountsSetti
       />
 
       <div className="space-y-1">
-        {c.providers.includes('chatgpt-codex') && (
-          <>
-            <div className="px-4 py-2">
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                AI Accounts
-              </span>
-            </div>
-            {renderOAuthProvider('chatgpt-codex', 'ChatGPT / Codex', <OpenAIIcon className="size-4" />, 'Use your ChatGPT subscription with Codex')}
-            <Separator className="my-3" />
-          </>
-        )}
-
         {/* Email & Calendar Section */}
         {(c.useComposioForGoogle || c.useComposioForGoogleCalendar || c.providers.includes('google')) && (
           <>

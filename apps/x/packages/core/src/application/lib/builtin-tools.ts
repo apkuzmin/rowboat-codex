@@ -745,7 +745,7 @@ export const BuiltinTools: z.infer<typeof BuiltinToolsSchema> = {
                 // Resolve model config from DI container
                 const modelConfigRepo = container.resolve<IModelConfigRepo>('modelConfigRepo');
                 const modelConfig = await modelConfigRepo.getConfig();
-                const provider = (await resolveActiveProvider(modelConfig.provider)).provider;
+                const provider = (await resolveActiveProvider(modelConfig)).provider;
                 const model = provider.languageModel(modelConfig.model);
 
                 const userPrompt = prompt || 'Convert this file to well-structured markdown.';

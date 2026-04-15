@@ -7,7 +7,10 @@ export const LlmProvider = z.object({
   headers: z.record(z.string(), z.string()).optional(),
 });
 
+export const LlmProviderMode = z.enum(["byok", "rowboat", "chatgpt-codex"]);
+
 export const LlmModelConfig = z.object({
+  providerMode: LlmProviderMode.optional().default("byok"),
   provider: LlmProvider,
   model: z.string(),
   models: z.array(z.string()).optional(),
