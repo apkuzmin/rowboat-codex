@@ -1,9 +1,9 @@
 import fs from 'fs';
 import path from 'path';
-import { generateText } from 'ai';
 import container from '../di/container.js';
 import type { IModelConfigRepo } from '../models/repo.js';
 import { resolveActiveProvider } from '../models/active-provider.js';
+import { generateTextForProvider } from '../models/text-generation.js';
 import { WorkDir } from '../config/config.js';
 
 const CALENDAR_SYNC_DIR = path.join(WorkDir, 'calendar_sync');
@@ -155,7 +155,7 @@ export async function summarizeMeeting(transcript: string, meetingStartTime?: st
 
     const prompt = `Meeting recording started at: ${meetingStartTime || 'unknown'}\n\n${transcript}${calendarContext}`;
 
-    const result = await generateText({
+    const result = await generateTextForProvider(activeProvider.mode, {
         model,
         system: SYSTEM_PROMPT,
         prompt,
