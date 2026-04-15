@@ -26,6 +26,7 @@ import {
 } from '@x/core/dist/auth/codex.js';
 import { normalizeCodexModelConfig } from '@x/core/dist/models/codex.js';
 import { emitOAuthEvent } from './ipc.js';
+import { getBillingInfo } from '@x/core/dist/billing/billing.js';
 
 const REDIRECT_URI = 'http://localhost:8080/oauth/callback';
 const CODEX_CALLBACK_PATH = '/auth/callback';
@@ -490,6 +491,17 @@ export async function connectProvider(
           triggerCalendarSync();
         } else if (provider === 'fireflies-ai') {
           triggerFirefliesSync();
+        }
+
+        // For Rowboat sign-in, ensure user + Stripe customer exist before
+        // notifying the renderer. Without this, parallel API calls from
+        // multiple renderer hooks race to create the user, causing duplicates.
+        if (provider === 'rowboat') {
+          try {
+            await getBillingInfo();
+          } catch (meError) {
+            console.error('[OAuth] Failed to initialize user via /v1/me:', meError);
+          }
         }
 
         // Emit success event to renderer
