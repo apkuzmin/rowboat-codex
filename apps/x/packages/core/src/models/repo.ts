@@ -25,7 +25,16 @@ export class FSModelConfigRepo implements IModelConfigRepo {
     private async loadRawConfig(): Promise<unknown | null> {
         try {
             const config = await fs.readFile(this.configPath, "utf8");
-            return JSON.parse(config);
+            try {
+                return JSON.parse(config);
+            } catch (error) {
+                console.warn(
+                    "[ModelConfigRepo] Corrupt models.json detected. Falling back to default config:",
+                    error instanceof Error ? error.message : String(error),
+                );
+                await fs.writeFile(this.configPath, JSON.stringify(defaultConfig, null, 2));
+                return defaultConfig;
+            }
         } catch {
             return null;
         }

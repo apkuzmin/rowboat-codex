@@ -1,6 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
 import z from 'zod';
-import container from '../di/container.js';
 import { IOAuthRepo } from './repo.js';
 import { OAuthTokens } from './types.js';
 import { ENABLE_CHATGPT_CODEX_PROVIDER } from '../config/env.js';
@@ -69,7 +68,8 @@ export type CodexTokenRecord = {
   metadata: CodexConnectionMetadata;
 };
 
-function getOAuthRepo(): IOAuthRepo {
+async function getOAuthRepo(): Promise<IOAuthRepo> {
+  const { default: container } = await import('../di/container.js');
   return container.resolve<IOAuthRepo>('oauthRepo');
 }
 
@@ -395,7 +395,7 @@ export async function refreshCodexTokensWithRetry(refreshToken: string, retries:
 }
 
 export async function getCodexAuthRecord(): Promise<CodexTokenRecord | null> {
-  const oauthRepo = getOAuthRepo();
+  const oauthRepo = await getOAuthRepo();
   const connection = await oauthRepo.read(CHATGPT_CODEX_PROVIDER);
   if (!connection.tokens) {
     return null;
@@ -444,7 +444,7 @@ export async function isCodexConnected(): Promise<boolean> {
   if (!isChatGptCodexEnabled()) {
     return false;
   }
-  const oauthRepo = getOAuthRepo();
+  const oauthRepo = await getOAuthRepo();
   const { tokens } = await oauthRepo.read(CHATGPT_CODEX_PROVIDER);
   return !!tokens;
 }

@@ -4,7 +4,7 @@
 
 This document tracks the current state of the `chatgpt-codex` provider in `apps/x`, what is already implemented, and what still needs to be done for a stable production-quality architecture.
 
-Current date of this status: `2026-04-15`
+Current date of this status: `2026-04-17`
 
 ## What is implemented
 
@@ -54,146 +54,82 @@ Current date of this status: `2026-04-15`
   - `store` is forced to `false`
 - Non-stream generation paths that use the active provider were switched to a Codex-safe text helper that uses `streamText()` for `chatgpt-codex`.
 
-## What is working now
+### 7. Codex-specific runtime transport for tool loops
 
-- Selecting `ChatGPT / Codex` in `Models`
-- Connecting the provider through OAuth
-- Discovering a live model catalog
-- Replacing stale saved model IDs with valid ones
-- Simple direct streamed inference against Codex upstream
-- Non-stream helper use cases that now internally stream for Codex:
-  - inline task schedule classification
-  - meeting summarization
-  - file-to-markdown builtin parsing
+- A dedicated Codex step transport exists in `packages/core/src/models/codex-runtime.ts`.
+- Agent runtime has an explicit Codex branch in `packages/core/src/agents/runtime.ts` using `streamCodexStep(...)`.
+- Codex steps reconstruct context from local state and avoid persisted upstream item IDs.
+- Codex error normalization is centralized in `normalizeCodexError(...)`.
 
-## Known blocker
+### 8. Safety and defaults updates
 
-The remaining major blocker is the tool-calling / multi-step loop used by the main agent runtime.
+- Corrupt or partial `models.json` handling has safe fallback behavior in the model config repo.
+- `chatgpt-codex` provider is now enabled by default and can still be explicitly disabled via `ENABLE_CHATGPT_CODEX_PROVIDER`.
 
-### Current failure mode
+## What is verified now
 
-Codex upstream requires `store: false`, but the current AI SDK Responses tool loop still relies on persisted item IDs between steps.
+### Code and packaging signals
 
-Observed upstream error:
+- `@x/core` build passes (`pnpm --filter @x/core build`).
+- Arm macOS installer build passes (`electron-forge make --platform darwin --arch arm64`), producing:
+  - `apps/x/apps/main/out/make/Rowboat-darwin-arm64-0.1.0.dmg`
+  - `apps/x/apps/main/out/make/zip/darwin/arm64/Rowboat-darwin-arm64-0.1.0.zip`
 
-`Item with id 'fc_...' not found. Items are not persisted when store is set to false.`
+### Automated test signals
 
-### Why this matters
-
-This means the current Rowboat/X agent runtime can start a Codex turn, but multi-step tool execution is not yet fully compatible with the upstream Codex backend contract.
-
-In practice:
-
-- simple one-shot streamed generation can work
-- full tool-driven agent turns are not yet reliable
+- `packages/core/src/models/codex-runtime.test.ts`: all tests pass.
+- `packages/core/src/models/repo.test.ts`: passes, including corrupt `models.json` fallback behavior.
+- `@x/core` test suite currently green (`vitest run`).
 
 ## Remaining work for production-quality architecture
 
-### Priority 1: Fix Codex tool loop compatibility
+### Priority 1: Complete end-to-end acceptance on a running app session
 
-Implement a Codex-specific step transport for tool calls instead of relying on the default AI SDK Responses persistence semantics.
+Tool-loop architecture work is done, but manual verification is still required in the real desktop flow.
 
-Needed work:
+Required checks:
 
-- inspect exactly how AI SDK serializes previous tool-call items between steps
-- introduce a Codex-specific request transformer or runtime path that:
-  - does not send persisted upstream item IDs
-  - reconstructs tool-call and tool-result context from local run state
-  - preserves `call_id` / tool correlation without relying on persisted upstream storage
-- verify this for:
-  - single tool call
-  - multiple tool calls in one turn
-  - multi-step turns with tool result continuation
-  - streamed assistant text after tool execution
+- `Settings -> Models`: select `ChatGPT / Codex`, ensure model list resolves correctly.
+- OAuth browser flow and device flow.
+- One simple streamed assistant response.
+- One full tool loop (`assistant -> tool-call -> tool-result -> assistant`) from the main runtime.
 
-### Priority 2: Separate Codex transport more explicitly
+### Priority 2: Stabilize automated validation
 
-Right now Codex is still layered through `createOpenAI(...)` with request patching. This is acceptable for v1 exploration, but not ideal long-term.
+- Fix failing `repo.test.ts` DI/container path in `packages/core`.
+- Ensure full `@x/core` test suite runs green on the default local toolchain.
+- Add/finish test coverage for:
+  - OAuth browser/device paths
+  - token refresh
+  - model discovery fallback behavior
+  - provider mode resolution and renderer model selection.
 
-Better architecture:
+### Priority 3: Audit indirect active-provider workflows
 
-- create a dedicated Codex transport/provider adapter
-- centralize all Codex-specific contracts there:
-  - required headers
-  - required request fields
-  - streaming behavior
-  - model discovery
-  - error normalization
-- avoid mixing Codex backend rules into generic OpenAI-compatible assumptions
-
-### Priority 3: Normalize error handling end-to-end
-
-Add explicit user-facing handling for Codex-specific backend errors, not only raw `AI_APICallError`.
-
-Needed work:
-
-- map model-not-supported errors to settings remediation
-- map auth/session errors to reconnect CTA
-- map tool-loop incompatibility errors to a clear “provider not fully supported for this workflow yet” message
-- ensure background services do not spam logs with opaque raw transport dumps
-
-### Priority 4: Tighten persistence and migration
-
-Needed work:
-
-- formalize migration behavior for old stale Codex IDs in `models.json`
-- add test coverage for migration cases
-- ensure partial/corrupt config files fail safely
-
-### Priority 5: Add real test coverage
-
-Current implementation was validated mostly by build checks and live probing. It still needs automated coverage.
-
-Needed tests:
-
-- OAuth browser flow
-- OAuth device flow
-- token refresh
-- model discovery success
-- model discovery fallback
-- stale config normalization
-- renderer model selection for Codex mode
-- runtime provider resolution by `providerMode`
-- Codex simple streamed generation
-- Codex tool-call loop compatibility once implemented
-
-### Priority 6: Revisit background service behavior under Codex mode
-
-Several background services call into the active provider:
+Confirm behavior for all services that indirectly call the active provider:
 
 - email labeling
 - inline tasks
 - meeting summarization
 - note/tag processing
 
-Needed work:
+For each path, define whether Codex is:
 
-- identify every place that uses the active provider indirectly
-- confirm each path is Codex-compatible
-- route unsupported workflows to:
-  - a simpler non-tool Codex path, or
-  - a different backend if configured, or
-  - a clear capability error
+- fully supported,
+- supported with a simplified non-tool path,
+- or intentionally blocked with a clear user-facing capability message.
 
-## Recommended next implementation step
+### Priority 4: Release hardening
 
-The next serious engineering step should be:
-
-1. instrument one failing multi-step Codex turn
-2. capture the exact step-to-step payload sequence
-3. replace persisted upstream item references with locally reconstructed tool context
-4. keep all Codex turns on `stream: true`
-5. verify the main agent runtime can complete at least one tool call end-to-end
-
-Until that is done, the provider should be considered:
-
-- usable for login, model selection, discovery, and simple streaming
-- not yet production-ready for full agent/tool architecture
+- Keep installer output reproducible.
+- For public distribution, add Apple signing + notarization pipeline (current local installer is unsigned).
 
 ## Relevant code areas
 
 - `apps/x/packages/core/src/auth/codex.ts`
+- `apps/x/packages/core/src/config/env.ts`
 - `apps/x/packages/core/src/models/codex.ts`
+- `apps/x/packages/core/src/models/codex-runtime.ts`
 - `apps/x/packages/core/src/models/active-provider.ts`
 - `apps/x/packages/core/src/models/repo.ts`
 - `apps/x/packages/core/src/models/text-generation.ts`

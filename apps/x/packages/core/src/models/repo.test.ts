@@ -38,8 +38,8 @@ describe('FSModelConfigRepo', () => {
     };
 
     expect(config.providerMode).toBe('byok');
-    expect(config.model).toBe('gpt-4.1');
+    expect(config.model).toBe('gpt-5.4');
     expect(persisted.providerMode).toBe('byok');
-    expect(persisted.model).toBe('gpt-4.1');
+    expect(persisted.model).toBe('gpt-5.4');
   });
 });
