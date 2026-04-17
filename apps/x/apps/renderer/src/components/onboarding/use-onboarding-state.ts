@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react"
 import { setGoogleCredentials } from "@/lib/google-credentials-store"
 import { toast } from "sonner"
+import { useCodexAuthState } from "@/hooks/useCodexAuthState"
 
 export interface ProviderState {
   isConnected: boolean
@@ -30,7 +31,42 @@ interface ProviderCatalogMeta {
   defaultMeetingNotesModel?: string
 }
 
+type AccountProviderSavePayload = {
+  providerMode: AccountProviderMode
+  model: string
+  models: string[]
+  knowledgeGraphModel?: string
+  meetingNotesModel?: string
+}
+
+function normalizeModelList(models: string[], primaryModel?: string): string[] {
+  const normalized = models.map((model) => model.trim()).filter(Boolean)
+  const ordered = primaryModel?.trim()
+    ? [primaryModel.trim(), ...normalized.filter((model) => model !== primaryModel.trim())]
+    : normalized
+  return [...new Set(ordered)]
+}
+
+function buildAccountProviderSavePayload(
+  providerMode: AccountProviderMode,
+  config: { model: string; knowledgeGraphModel: string },
+  previousConfig?: { model?: string; models?: string[]; meetingNotesModel?: string },
+): AccountProviderSavePayload {
+  const models = normalizeModelList(
+    Array.isArray(previousConfig?.models) ? previousConfig.models : [config.model],
+    config.model || previousConfig?.model,
+  )
+  return {
+    providerMode,
+    model: models[0] || config.model.trim(),
+    models,
+    knowledgeGraphModel: config.knowledgeGraphModel.trim() || undefined,
+    meetingNotesModel: previousConfig?.meetingNotesModel?.trim() || undefined,
+  }
+}
+
 export function useOnboardingState(open: boolean, onComplete: () => void) {
+  const codexAuth = useCodexAuthState(open)
   const [currentStep, setCurrentStep] = useState<Step>(0)
   const [onboardingPath, setOnboardingPath] = useState<OnboardingPath>(null)
 
@@ -141,7 +177,7 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
   const canSaveAccountProvider =
     llmProviderMode !== "byok" &&
     activeConfig.model.trim().length > 0 &&
-    !!providerStates[llmProviderMode]?.isConnected
+    codexAuth.state.isConnected
 
   // Track connected providers for the completion step
   const connectedProviders = Object.entries(providerStates)
@@ -156,7 +192,8 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
       try {
         setProvidersLoading(true)
         const result = await window.ipc.invoke('oauth:list-providers', null)
-        setProviders(result.providers || [])
+        const nextProviders = Array.isArray(result.providers) ? result.providers : []
+        setProviders(nextProviders.filter((provider: string) => provider !== 'chatgpt-codex'))
       } catch (error) {
         console.error('Failed to get available providers:', error)
         setProviders([])
@@ -529,16 +566,28 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
         handleNext()
         return
       }
-      await window.ipc.invoke("models:saveConfig", {
-        providerMode: llmProviderMode,
-        provider: {
-          flavor: llmProvider,
-          apiKey: providerConfigs[llmProvider].apiKey.trim() || undefined,
-          baseURL: providerConfigs[llmProvider].baseURL.trim() || undefined,
+      let previousAccountConfig: { model?: string; models?: string[]; meetingNotesModel?: string } | undefined
+      try {
+        const result = await window.ipc.invoke("workspace:readFile", { path: "config/models.json" })
+        const parsed = JSON.parse(result.data)
+        if (parsed?.providerMode === llmProviderMode) {
+          previousAccountConfig = {
+            model: typeof parsed?.model === "string" ? parsed.model : undefined,
+            models: Array.isArray(parsed?.models) ? parsed.models : undefined,
+            meetingNotesModel: typeof parsed?.meetingNotesModel === "string" ? parsed.meetingNotesModel : undefined,
+          }
+        }
+      } catch {
+        // No existing config yet.
+      }
+      await window.ipc.invoke("models:saveConfig", buildAccountProviderSavePayload(
+        llmProviderMode,
+        {
+          model,
+          knowledgeGraphModel: knowledgeGraphModel || "",
         },
-        model,
-        knowledgeGraphModel,
-      })
+        previousAccountConfig,
+      ))
       setTestState({ status: "success" })
       window.dispatchEvent(new Event('models-config-changed'))
       handleNext()
@@ -611,6 +660,7 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
   useEffect(() => {
     const cleanup = window.ipc.on('oauth:didConnect', (event) => {
       const { provider, success } = event
+      if (provider === 'chatgpt-codex') return
 
       setProviderStates(prev => ({
         ...prev,
@@ -685,6 +735,15 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
     credentials?: { clientId: string; clientSecret: string },
     mode: 'browser' | 'device' = 'browser',
   ) => {
+    if (provider === 'chatgpt-codex') {
+      if (mode === 'device') {
+        await codexAuth.startDeviceConnect()
+      } else {
+        await codexAuth.connect()
+      }
+      return
+    }
+
     setProviderStates(prev => ({
       ...prev,
       [provider]: { ...prev[provider], isConnecting: true }
@@ -718,7 +777,7 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
         [provider]: { ...prev[provider], isConnecting: false }
       }))
     }
-  }, [])
+  }, [codexAuth])
 
   // Connect to a provider
   const handleConnect = useCallback(async (provider: string) => {
@@ -785,6 +844,7 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
     providersLoading,
     providerStates,
     providerStatus,
+    codexAuth,
     googleClientIdOpen,
     setGoogleClientIdOpen,
     connectedProviders,

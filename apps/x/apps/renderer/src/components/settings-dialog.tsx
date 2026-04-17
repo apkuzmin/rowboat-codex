@@ -195,6 +195,57 @@ interface AccountProviderConfig {
   meetingNotesModel: string
 }
 
+type AccountProviderSavePayload = {
+  providerMode: AccountProviderMode
+  model: string
+  models: string[]
+  knowledgeGraphModel?: string
+  meetingNotesModel?: string
+}
+
+type SaveConfigInvokePayload =
+  | AccountProviderSavePayload
+  | {
+      providerMode: "byok"
+      provider: {
+        flavor: LlmProviderFlavor
+        apiKey?: string
+        baseURL?: string
+        headers?: Record<string, string>
+      }
+      model: string
+      models: string[]
+      knowledgeGraphModel?: string
+      meetingNotesModel?: string
+    }
+
+function normalizeModelList(models: string[], primaryModel?: string): string[] {
+  const normalized = models.map((model) => model.trim()).filter(Boolean)
+  const ordered = primaryModel?.trim()
+    ? [primaryModel.trim(), ...normalized.filter((model) => model !== primaryModel.trim())]
+    : normalized
+  return [...new Set(ordered)]
+}
+
+function buildAccountProviderSavePayload(
+  providerMode: AccountProviderMode,
+  config: AccountProviderConfig,
+  primaryModel?: string,
+): AccountProviderSavePayload {
+  const models = normalizeModelList(config.models, primaryModel ?? config.models[0])
+  return {
+    providerMode,
+    model: models[0] || "",
+    models,
+    knowledgeGraphModel: config.knowledgeGraphModel.trim() || undefined,
+    meetingNotesModel: config.meetingNotesModel.trim() || undefined,
+  }
+}
+
+async function saveModelsConfig(payload: SaveConfigInvokePayload) {
+  await (window.ipc as any).invoke("models:saveConfig", payload)
+}
+
 const primaryProviders: Array<{ id: LlmProviderFlavor; name: string; description: string }> = [
   { id: "openai", name: "OpenAI", description: "GPT models" },
   { id: "anthropic", name: "Anthropic", description: "Claude models" },
@@ -225,15 +276,11 @@ const accountProviders: Array<{ id: AccountProviderMode; name: string; descripti
 
 function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
   const connectors = useConnectors(dialogOpen)
+  const providerStates = connectors.providerStates as Partial<Record<AccountProviderMode, any>>
+  const providerStatus = connectors.providerStatus as Partial<Record<AccountProviderMode, any>>
   const [providerMode, setProviderMode] = useState<ProviderMode>("byok")
   const [provider, setProvider] = useState<LlmProviderFlavor>("openai")
   const [defaultProvider, setDefaultProvider] = useState<LlmProviderFlavor | null>(null)
-  const [savedByokProvider, setSavedByokProvider] = useState<{
-    flavor: LlmProviderFlavor
-    apiKey?: string
-    baseURL?: string
-    headers?: Record<string, string>
-  }>({ flavor: "openai" })
   const [providerConfigs, setProviderConfigs] = useState<Record<LlmProviderFlavor, ByokProviderConfig>>({
     openai: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
     anthropic: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
@@ -260,8 +307,8 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
   const activeAccountConfig = activeAccountMode ? accountConfigs[activeAccountMode] : null
   const activeModels = activeAccountConfig?.models ?? activeByokConfig.models
   const primaryModel = activeModels[0] || ""
-  const accountStatus = activeAccountMode ? connectors.providerStatus[activeAccountMode] : undefined
-  const accountState = activeAccountMode ? connectors.providerStates[activeAccountMode] || {
+  const accountStatus = activeAccountMode ? providerStatus[activeAccountMode] : undefined
+  const accountState = activeAccountMode ? providerStates[activeAccountMode] || {
     isConnected: false,
     isLoading: connectors.providersLoading,
     isConnecting: false,
@@ -376,17 +423,15 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
           path: "config/models.json",
         })
         const parsed = JSON.parse(result.data)
-        if (parsed?.provider?.flavor) {
-          const savedMode = (parsed.providerMode || "byok") as ProviderMode
-          const flavor = parsed.provider.flavor as LlmProviderFlavor
+        const savedMode = (parsed.providerMode || "byok") as ProviderMode
+        const fallbackFlavor = defaultProvider ?? provider
+        const flavor = savedMode === "byok"
+          ? parsed?.provider?.flavor as LlmProviderFlavor | undefined
+          : fallbackFlavor
+
+        if (flavor) {
           setProviderMode(savedMode)
           setProvider(flavor)
-          setSavedByokProvider({
-            flavor,
-            apiKey: parsed.provider.apiKey,
-            baseURL: parsed.provider.baseURL,
-            headers: parsed.provider.headers,
-          })
           setDefaultProvider(savedMode === "byok" ? flavor : null)
           setProviderConfigs(prev => {
             const next = { ...prev };
@@ -561,9 +606,8 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
       }
       const result = await window.ipc.invoke("models:test", providerConfig)
       if (result.success) {
-        await window.ipc.invoke("models:saveConfig", providerConfig)
+        await saveModelsConfig(providerConfig)
         setDefaultProvider(provider)
-        setSavedByokProvider(providerConfig.provider)
         setTestState({ status: "success" })
         window.dispatchEvent(new Event('models-config-changed'))
         toast.success("Model configuration saved")
@@ -581,15 +625,7 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
     if (!canSaveAccountMode || !activeAccountMode || !activeAccountConfig) return
     setTestState({ status: "testing" })
     try {
-      const models = activeAccountConfig.models.map(m => m.trim()).filter(Boolean)
-      await window.ipc.invoke("models:saveConfig", {
-        providerMode: activeAccountMode,
-        provider: savedByokProvider,
-        model: models[0] || "",
-        models,
-        knowledgeGraphModel: activeAccountConfig.knowledgeGraphModel.trim() || undefined,
-        meetingNotesModel: activeAccountConfig.meetingNotesModel.trim() || undefined,
-      })
+      await saveModelsConfig(buildAccountProviderSavePayload(activeAccountMode, activeAccountConfig))
       setTestState({ status: "success" })
       window.dispatchEvent(new Event('models-config-changed'))
       toast.success("Model provider saved")
@@ -597,14 +633,14 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
       setTestState({ status: "error", error: "Failed to save model provider" })
       toast.error("Failed to save model provider")
     }
-  }, [activeAccountConfig, activeAccountMode, canSaveAccountMode, savedByokProvider])
+  }, [activeAccountConfig, activeAccountMode, canSaveAccountMode])
 
   const handleSetDefault = useCallback(async (prov: LlmProviderFlavor) => {
     const config = providerConfigs[prov]
     const allModels = config.models.map(m => m.trim()).filter(Boolean)
     if (!allModels[0]) return
     try {
-      await window.ipc.invoke("models:saveConfig", {
+      await saveModelsConfig({
         providerMode: "byok" as const,
         provider: {
           flavor: prov,
@@ -618,11 +654,6 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
       })
       setProviderMode("byok")
       setDefaultProvider(prov)
-      setSavedByokProvider({
-        flavor: prov,
-        apiKey: config.apiKey.trim() || undefined,
-        baseURL: config.baseURL.trim() || undefined,
-      })
       window.dispatchEvent(new Event('models-config-changed'))
       toast.success("Default provider updated")
     } catch {
@@ -724,12 +755,12 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
   }
 
   const renderAccountProviderCard = (p: { id: AccountProviderMode; name: string; description: string }) => {
-    const state = connectors.providerStates[p.id] || {
+    const state = providerStates[p.id] || {
       isConnected: false,
       isLoading: connectors.providersLoading,
       isConnecting: false,
     }
-    const status = connectors.providerStatus[p.id]
+    const status = providerStatus[p.id]
     const isSelected = providerMode === p.id
     const isDefault = providerMode === p.id
 

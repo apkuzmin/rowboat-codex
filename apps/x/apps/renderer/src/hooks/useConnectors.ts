@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react"
 import { setGoogleCredentials, clearGoogleCredentials } from "@/lib/google-credentials-store"
 import { toast } from "sonner"
+import { useCodexAuthState } from "@/hooks/useCodexAuthState"
 
 export interface ProviderState {
   isConnected: boolean
@@ -14,14 +15,16 @@ export interface ProviderStatus {
   planType?: string | null
 }
 
+const CODEX_PROVIDER = 'chatgpt-codex'
+
 const providerDisplayName = (provider: string) => {
   if (provider === 'rowboat') return 'Rowboat'
   if (provider === 'fireflies-ai') return 'Fireflies'
-  if (provider === 'chatgpt-codex') return 'ChatGPT / Codex'
   return provider.charAt(0).toUpperCase() + provider.slice(1)
 }
 
 export function useConnectors(active: boolean) {
+  const codexAuth = useCodexAuthState(active)
   const [providers, setProviders] = useState<string[]>([])
   const [providersLoading, setProvidersLoading] = useState(true)
   const [providerStates, setProviderStates] = useState<Record<string, ProviderState>>({})
@@ -65,7 +68,8 @@ export function useConnectors(active: boolean) {
       try {
         setProvidersLoading(true)
         const result = await window.ipc.invoke('oauth:list-providers', null)
-        setProviders(result.providers || [])
+        const nextProviders = Array.isArray(result.providers) ? result.providers : []
+        setProviders(nextProviders.filter((provider: string) => provider !== CODEX_PROVIDER))
       } catch (error) {
         console.error('Failed to get available providers:', error)
         setProviders([])
@@ -377,6 +381,11 @@ export function useConnectors(active: boolean) {
   }, [])
 
   const handleConnect = useCallback(async (provider: string) => {
+    if (provider === CODEX_PROVIDER) {
+      await codexAuth.connect()
+      return
+    }
+
     if (provider === 'google') {
       setGoogleClientIdDescription(undefined)
       setGoogleClientIdOpen(true)
@@ -384,11 +393,16 @@ export function useConnectors(active: boolean) {
     }
 
     await startConnect(provider)
-  }, [startConnect])
+  }, [codexAuth, startConnect])
 
   const startDeviceConnect = useCallback(async (provider: string) => {
+    if (provider === CODEX_PROVIDER) {
+      await codexAuth.startDeviceConnect()
+      return
+    }
+
     await startConnect(provider, undefined, 'device')
-  }, [startConnect])
+  }, [codexAuth, startConnect])
 
   const handleGoogleClientIdSubmit = useCallback((clientId: string, clientSecret: string) => {
     setGoogleCredentials(clientId, clientSecret)
@@ -398,6 +412,11 @@ export function useConnectors(active: boolean) {
   }, [startConnect])
 
   const handleDisconnect = useCallback(async (provider: string) => {
+    if (provider === CODEX_PROVIDER) {
+      await codexAuth.disconnect()
+      return
+    }
+
     setProviderStates(prev => ({
       ...prev,
       [provider]: { ...prev[provider], isLoading: true }
@@ -435,7 +454,7 @@ export function useConnectors(active: boolean) {
         [provider]: { ...prev[provider], isLoading: false }
       }))
     }
-  }, [])
+  }, [codexAuth])
 
   // Refresh all statuses
   const refreshAllStatuses = useCallback(async () => {
@@ -500,6 +519,7 @@ export function useConnectors(active: boolean) {
   useEffect(() => {
     const cleanup = window.ipc.on('oauth:didConnect', async (event) => {
       const { provider, success } = event
+      if (provider === CODEX_PROVIDER) return
 
       setProviderStates(prev => ({
         ...prev,
@@ -514,13 +534,6 @@ export function useConnectors(active: boolean) {
         const displayName = providerDisplayName(provider)
         if (provider === 'rowboat') {
           toast.success('Logged in to Rowboat')
-        } else if (provider === 'chatgpt-codex') {
-          toast.success(`Connected to ${displayName}`, {
-            description: event.planType
-              ? `${event.planType} plan detected${event.email ? ` for ${event.email}` : ''}.`
-              : (event.email ? `Connected as ${event.email}.` : 'Your ChatGPT account is ready to use.'),
-            duration: 8000,
-          })
         } else if (provider === 'google' || provider === 'fireflies-ai') {
           toast.success(`Connected to ${displayName}`, {
             description: 'Syncing your data in the background. This may take a few minutes before changes appear.',
@@ -591,17 +604,28 @@ export function useConnectors(active: boolean) {
     (status) => Boolean(status?.error)
   )
 
+  const mergedProviderStates: Record<string, ProviderState> = {
+    ...providerStates,
+    [CODEX_PROVIDER]: codexAuth.state,
+  }
+
+  const mergedProviderStatus: Record<string, ProviderStatus> = {
+    ...providerStatus,
+    [CODEX_PROVIDER]: codexAuth.status,
+  }
+
   return {
     // OAuth providers
     providers,
     providersLoading,
-    providerStates,
-    providerStatus,
+    providerStates: mergedProviderStates,
+    providerStatus: mergedProviderStatus,
     hasProviderError,
     handleConnect,
     handleDisconnect,
     startConnect,
     startDeviceConnect,
+    codexAuth,
 
     // Google credentials modal
     googleClientIdOpen,

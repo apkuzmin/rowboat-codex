@@ -19,9 +19,7 @@ export type ActiveProviderContext = {
 export async function resolveActiveProvider(
   config: z.infer<typeof ModelConfig>,
 ): Promise<ActiveProviderContext> {
-  const providerMode = config.providerMode ?? 'byok';
-
-  if (providerMode === 'rowboat') {
+  if (config.providerMode === 'rowboat') {
     if (!(await isSignedIn())) {
       throw new Error('Rowboat is selected in Models, but the Rowboat account is not signed in.');
     }
@@ -34,7 +32,7 @@ export async function resolveActiveProvider(
     };
   }
 
-  if (providerMode === 'chatgpt-codex') {
+  if (config.providerMode === 'chatgpt-codex') {
     if (!(await isCodexConnected())) {
       throw new Error('ChatGPT / Codex is selected in Models, but the account is not connected.');
     }

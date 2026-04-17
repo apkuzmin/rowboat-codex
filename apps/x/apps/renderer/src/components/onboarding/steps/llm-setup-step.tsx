@@ -62,8 +62,7 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
     updateAccountProviderConfig,
     handleTestAndSaveLlmConfig,
     handleBack,
-    providerStates,
-    providerStatus,
+    codexAuth,
     handleConnect,
     startDeviceConnect,
     setOnboardingPath,
@@ -72,7 +71,8 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
     handleSwitchToRowboat,
   } = state
 
-  const codexState = providerStates["chatgpt-codex"] || { isConnected: false, isLoading: false, isConnecting: false }
+  const codexState = codexAuth.state
+  const codexStatus = codexAuth.status
   const isMoreProvider = llmProviderMode === "byok" && moreProviders.some(p => p.id === llmProvider)
   const modelsForProvider = modelsCatalog[llmProviderMode === "byok" ? llmProvider : llmProviderMode] || []
   const selectedCatalogMeta = catalogMeta[llmProviderMode === "byok" ? llmProvider : llmProviderMode] || {}
@@ -151,7 +151,7 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
 
       <div className="space-y-3 mb-4">
         <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Provider</span>
-        {state.providers.includes("chatgpt-codex") && (
+        {codexAuth.isAvailable && (
           <motion.button
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
@@ -177,7 +177,7 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
                 <div className="text-xs text-muted-foreground">Use your ChatGPT subscription</div>
                 <div className="mt-1 text-[11px] text-muted-foreground">
                   {codexState.isLoading ? "Checking connection..." : codexState.isConnected
-                    ? ([providerStatus["chatgpt-codex"]?.email, providerStatus["chatgpt-codex"]?.planType].filter(Boolean).join(" · ") || "Connected")
+                    ? ([codexStatus.email, codexStatus.planType].filter(Boolean).join(" · ") || "Connected")
                     : "Connect in-browser or with a device code"}
                 </div>
               </div>
@@ -311,7 +311,7 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
                 <div className="text-sm font-medium">ChatGPT / Codex account</div>
                 <div className="text-xs text-muted-foreground">
                   {codexState.isLoading ? "Checking connection..." : codexState.isConnected
-                    ? ([providerStatus["chatgpt-codex"]?.email, providerStatus["chatgpt-codex"]?.planType].filter(Boolean).join(" · ") || "Connected")
+                    ? ([codexStatus.email, codexStatus.planType].filter(Boolean).join(" · ") || "Connected")
                     : "Not connected"}
                 </div>
               </div>

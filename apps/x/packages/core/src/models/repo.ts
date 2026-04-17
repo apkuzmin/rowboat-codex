@@ -74,23 +74,15 @@ export class FSModelConfigRepo implements IModelConfigRepo {
     async setConfig(config: z.infer<typeof ModelConfig>): Promise<void> {
         const normalized = await normalizeCodexModelConfig(config);
         config = normalized.config;
-        const providerMode = config.providerMode ?? "byok";
+        const providerMode = config.providerMode;
         let existingProviders: Record<string, Record<string, unknown>> = {};
-        let existingTopLevelProvider = config.provider;
         const existing = await this.loadRawConfig();
         if (existing && typeof existing === "object") {
             const existingRecord = existing as Record<string, unknown>;
             existingProviders = (existingRecord.providers as Record<string, Record<string, unknown>> | undefined) || {};
-            if (
-                existingRecord.provider
-                && typeof existingRecord.provider === "object"
-                && "flavor" in (existingRecord.provider as Record<string, unknown>)
-            ) {
-                existingTopLevelProvider = existingRecord.provider as z.infer<typeof ModelConfig>["provider"];
-            }
         }
 
-        if (providerMode === "byok") {
+        if (config.providerMode === "byok") {
             existingProviders[config.provider.flavor] = {
                 ...existingProviders[config.provider.flavor],
                 apiKey: config.provider.apiKey,
@@ -101,13 +93,21 @@ export class FSModelConfigRepo implements IModelConfigRepo {
                 knowledgeGraphModel: config.knowledgeGraphModel,
                 meetingNotesModel: config.meetingNotesModel,
             };
-            existingTopLevelProvider = config.provider;
+            const toWrite = {
+                ...config,
+                providerMode,
+                providers: existingProviders,
+            };
+            await fs.writeFile(this.configPath, JSON.stringify(toWrite, null, 2));
+            return;
         }
 
         const toWrite = {
-            ...config,
             providerMode,
-            provider: existingTopLevelProvider,
+            model: config.model,
+            models: config.models,
+            knowledgeGraphModel: config.knowledgeGraphModel,
+            meetingNotesModel: config.meetingNotesModel,
             providers: existingProviders,
         };
         await fs.writeFile(this.configPath, JSON.stringify(toWrite, null, 2));

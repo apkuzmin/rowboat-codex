@@ -77,6 +77,69 @@ interface ConfiguredModel {
   baseURL?: string
   headers?: Record<string, string>
   knowledgeGraphModel?: string
+  meetingNotesModel?: string
+}
+
+type ProviderMode = 'byok' | 'rowboat' | 'chatgpt-codex'
+type AccountProviderMode = Exclude<ProviderMode, 'byok'>
+
+type AccountBackedConfig = {
+  providerMode: AccountProviderMode
+  model?: string
+  models?: string[]
+  knowledgeGraphModel?: string
+  meetingNotesModel?: string
+}
+
+type SaveConfigInvokePayload =
+  | {
+      providerMode: AccountProviderMode
+      model: string
+      models: string[]
+      knowledgeGraphModel?: string
+      meetingNotesModel?: string
+    }
+  | {
+      providerMode: 'byok'
+      provider: {
+        flavor: ConfiguredModel['flavor']
+        apiKey?: string
+        baseURL?: string
+        headers?: Record<string, string>
+      }
+      model: string
+      models: string[]
+      knowledgeGraphModel?: string
+    }
+
+function normalizeModelList(models: string[], primaryModel?: string): string[] {
+  const normalized = models.map((model) => model.trim()).filter(Boolean)
+  const ordered = primaryModel?.trim()
+    ? [primaryModel.trim(), ...normalized.filter((model) => model !== primaryModel.trim())]
+    : normalized
+  return [...new Set(ordered)]
+}
+
+function buildAccountBackedSavePayload(
+  config: AccountBackedConfig,
+  primaryModel: string,
+  fallbackModels: string[],
+) {
+  const models = normalizeModelList(
+    Array.isArray(config.models) && config.models.length > 0 ? config.models : fallbackModels,
+    primaryModel || config.model,
+  )
+  return {
+    providerMode: config.providerMode,
+    model: models[0] || primaryModel,
+    models,
+    knowledgeGraphModel: config.knowledgeGraphModel?.trim() || undefined,
+    meetingNotesModel: config.meetingNotesModel?.trim() || undefined,
+  }
+}
+
+async function saveModelsConfig(payload: SaveConfigInvokePayload) {
+  await (window.ipc as any).invoke('models:saveConfig', payload)
 }
 
 function getAttachmentIcon(kind: AttachmentIconKind) {
@@ -182,7 +245,7 @@ function ChatInputInner({
     try {
       const result = await window.ipc.invoke('workspace:readFile', { path: 'config/models.json' })
       const parsed = JSON.parse(result.data)
-      const providerMode = (parsed?.providerMode || 'byok') as 'byok' | 'rowboat' | 'chatgpt-codex'
+      const providerMode = (parsed?.providerMode || 'byok') as ProviderMode
 
       if (providerMode === 'rowboat' || providerMode === 'chatgpt-codex') {
         let models: ConfiguredModel[] = []
@@ -193,8 +256,27 @@ function ChatInputInner({
             (p: { id: string }) => p.id === providerMode
           )
           models = (activeProvider?.models || []).map(
-            (m: { id: string }) => ({ flavor: providerMode, model: m.id, knowledgeGraphModel: parsed?.knowledgeGraphModel || undefined })
+            (m: { id: string }) => ({
+              flavor: providerMode,
+              model: m.id,
+              knowledgeGraphModel: parsed?.knowledgeGraphModel || undefined,
+              meetingNotesModel: parsed?.meetingNotesModel || undefined,
+            })
           )
+          const configuredModelOrder = normalizeModelList(
+            Array.isArray(parsed?.models) ? parsed.models : [],
+            resolvedDefaultModel,
+          )
+          if (configuredModelOrder.length > 0) {
+            models.sort((a, b) => {
+              const aIndex = configuredModelOrder.indexOf(a.model)
+              const bIndex = configuredModelOrder.indexOf(b.model)
+              if (aIndex === -1 && bIndex === -1) return 0
+              if (aIndex === -1) return 1
+              if (bIndex === -1) return -1
+              return aIndex - bIndex
+            })
+          }
           const validIds = new Set(models.map((entry) => entry.model))
           const providerMeta = activeProvider?.meta || {}
           if (!validIds.has(resolvedDefaultModel)) {
@@ -202,7 +284,12 @@ function ChatInputInner({
           }
         } catch {
           if (parsed?.model) {
-            models = [{ flavor: providerMode, model: parsed.model, knowledgeGraphModel: parsed.knowledgeGraphModel || undefined }]
+            models = [{
+              flavor: providerMode,
+              model: parsed.model,
+              knowledgeGraphModel: parsed.knowledgeGraphModel || undefined,
+              meetingNotesModel: parsed.meetingNotesModel || undefined,
+            }]
           }
         }
 
@@ -300,20 +387,27 @@ function ChatInputInner({
       if (entry.flavor === 'rowboat' || entry.flavor === 'chatgpt-codex') {
         const result = await window.ipc.invoke('workspace:readFile', { path: 'config/models.json' })
         const parsed = JSON.parse(result.data)
-        await window.ipc.invoke('models:saveConfig', {
+        const accountConfig: AccountBackedConfig = {
           providerMode: entry.flavor,
-          provider: parsed?.provider?.flavor
-            ? parsed.provider
-            : { flavor: 'openai' as const },
-          model: entry.model,
-          knowledgeGraphModel: entry.knowledgeGraphModel,
-        })
+          model: typeof parsed?.model === 'string' ? parsed.model : undefined,
+          models: Array.isArray(parsed?.models) ? parsed.models : undefined,
+          knowledgeGraphModel: typeof parsed?.knowledgeGraphModel === 'string'
+            ? parsed.knowledgeGraphModel
+            : entry.knowledgeGraphModel,
+          meetingNotesModel: typeof parsed?.meetingNotesModel === 'string'
+            ? parsed.meetingNotesModel
+            : entry.meetingNotesModel,
+        }
+        const fallbackModels = configuredModels
+          .filter((m) => m.flavor === entry.flavor)
+          .map((m) => m.model)
+        await saveModelsConfig(buildAccountBackedSavePayload(accountConfig, entry.model, fallbackModels))
       } else {
         // BYOK — preserve full provider config
         const providerModels = configuredModels
           .filter((m) => m.flavor === entry.flavor)
           .map((m) => m.model)
-        await window.ipc.invoke('models:saveConfig', {
+        await saveModelsConfig({
           providerMode: 'byok',
           provider: {
             flavor: entry.flavor,

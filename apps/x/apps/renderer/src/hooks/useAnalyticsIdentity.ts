@@ -59,6 +59,7 @@ export function useAnalyticsIdentity() {
   useEffect(() => {
     const cleanup = window.ipc.on('oauth:didConnect', (event) => {
       if (!event.success) return
+      if (event.provider === 'chatgpt-codex') return
 
       // If Rowboat provider connected, identify user
       if (event.provider === 'rowboat' && event.userId) {

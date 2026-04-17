@@ -12,7 +12,8 @@ Current date of this status: `2026-04-17`
 
 - `ChatGPT / Codex` exists as a first-class provider choice in `Settings -> Models`.
 - It is implemented as an account-backed provider mode, not as a fake BYOK `flavor`.
-- `providerMode` is persisted separately from BYOK provider config.
+- Account-backed model config no longer requires a synthetic BYOK `provider` payload.
+- `providerMode` is persisted separately from BYOK provider config, and `provider` is now BYOK-only persisted state.
 - `ChatGPT / Codex` was removed from `Connected Accounts` and connector-style entry points to avoid duplicate UX.
 
 ### 2. Auth and token lifecycle
@@ -45,6 +46,8 @@ Current date of this status: `2026-04-17`
 - `Settings -> Models` reads the resolved Codex catalog instead of static IDs.
 - Onboarding model setup uses the same catalog source.
 - Chat input model picker uses the same catalog source.
+- Codex auth state is isolated from generic renderer connectors and used only in model-selection surfaces.
+- Quick model switching preserves account-backed config fields such as `models`, `knowledgeGraphModel`, and `meetingNotesModel`.
 - UI surfaces fallback/discovery state and warns when stale saved model IDs were replaced.
 
 ### 6. Codex request normalization
