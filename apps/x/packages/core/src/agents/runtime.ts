@@ -11,11 +11,14 @@ import { execTool } from "../application/lib/exec-tool.js";
 import { AskHumanRequestEvent, RunEvent, ToolPermissionRequestEvent } from "@x/shared/dist/runs.js";
 import { BuiltinTools } from "../application/lib/builtin-tools.js";
 import { buildCopilotAgent } from "../application/assistant/agent.js";
+import { buildTrackRunAgent } from "../knowledge/track/run-agent.js";
 import { isBlocked, extractCommandNames } from "../application/lib/command-executor.js";
 import container from "../di/container.js";
 import { IModelConfigRepo } from "../models/repo.js";
 import { ActiveProviderMode, resolveActiveProvider } from "../models/active-provider.js";
 import { normalizeCodexError, streamCodexStep } from "../models/codex-runtime.js";
+import { createProvider } from "../models/models.js";
+import { resolveProviderConfig } from "../models/defaults.js";
 import { IAgentsRepo } from "./repo.js";
 import { IMonotonicallyIncreasingIdGenerator } from "../application/lib/id-gen.js";
 import { IBus } from "../application/lib/bus.js";
@@ -25,6 +28,8 @@ import { IRunsLock } from "../runs/lock.js";
 import { IAbortRegistry } from "../runs/abort-registry.js";
 import { PrefixLogger } from "@x/shared";
 import { parse } from "yaml";
+import { captureLlmUsage } from "../analytics/usage.js";
+import { enterUseCase, type UseCase } from "../analytics/use_case.js";
 import { getRaw as getNoteCreationRaw } from "../knowledge/note_creation.js";
 import { getRaw as getLabelingAgentRaw } from "../knowledge/labeling_agent.js";
 import { getRaw as getNoteTaggingAgentRaw } from "../knowledge/note_tagging_agent.js";
@@ -192,6 +197,19 @@ export class AgentRuntime implements IAgentRuntime {
                 await this.runsRepo.appendEvents(runId, [stoppedEvent]);
                 await this.bus.publish(stoppedEvent);
             }
+        } catch (error) {
+            console.error(`Run ${runId} failed:`, error);
+            const message = error instanceof Error
+                ? (error.stack || error.message || error.name)
+                : typeof error === "string" ? error : JSON.stringify(error);
+            const errorEvent: z.infer<typeof RunEvent> = {
+                runId,
+                type: "error",
+                error: message,
+                subflow: [],
+            };
+            await this.runsRepo.appendEvents(runId, [errorEvent]);
+            await this.bus.publish(errorEvent);
         } finally {
             this.abortRegistry.cleanup(runId);
             await this.runsLock.release(runId);
@@ -374,6 +392,10 @@ function formatLlmStreamError(rawError: unknown): string {
 export async function loadAgent(id: string): Promise<z.infer<typeof Agent>> {
     if (id === "copilot" || id === "rowboatx") {
         return buildCopilotAgent();
+    }
+
+    if (id === "track-run") {
+        return buildTrackRunAgent();
     }
 
     if (id === 'note_creation') {
@@ -635,6 +657,10 @@ export class AgentState {
     runId: string | null = null;
     agent: z.infer<typeof Agent> | null = null;
     agentName: string | null = null;
+    runModel: string | null = null;
+    runProvider: string | null = null;
+    runUseCase: UseCase | null = null;
+    runSubUseCase: string | null = null;
     messages: z.infer<typeof MessageList> = [];
     lastAssistantMsg: z.infer<typeof AssistantMessage> | null = null;
     subflowStates: Record<string, AgentState> = {};
@@ -748,13 +774,22 @@ export class AgentState {
             case "start":
                 this.runId = event.runId;
                 this.agentName = event.agentName;
+                this.runModel = event.model;
+                this.runProvider = event.provider;
+                this.runUseCase = event.useCase ?? null;
+                this.runSubUseCase = event.subUseCase ?? null;
                 break;
             case "spawn-subflow":
                 // Seed the subflow state with its agent so downstream loadAgent works.
+                // Subflows inherit the parent run's model+provider — there's one pair per run.
                 if (!this.subflowStates[event.toolCallId]) {
                     this.subflowStates[event.toolCallId] = new AgentState();
                 }
                 this.subflowStates[event.toolCallId].agentName = event.agentName;
+                this.subflowStates[event.toolCallId].runModel = this.runModel;
+                this.subflowStates[event.toolCallId].runProvider = this.runProvider;
+                this.subflowStates[event.toolCallId].runUseCase = this.runUseCase;
+                this.subflowStates[event.toolCallId].runSubUseCase = this.runSubUseCase;
                 break;
             case "message":
                 this.messages.push(event.message);
@@ -843,42 +878,50 @@ export async function* streamAgent({
         yield event;
     }
 
-    const modelConfig = await modelConfigRepo.getConfig();
-    if (!modelConfig) {
-        throw new Error("Model config not found");
-    }
-
     // set up agent
     const agent = await loadAgent(state.agentName!);
 
     // set up tools
     const tools = await buildTools(agent);
 
-    // set up provider + model
-    const activeProvider = await resolveActiveProvider(modelConfig);
-    const provider = activeProvider.provider;
-    const knowledgeGraphAgents = ["note_creation", "email-draft", "meeting-prep", "labeling_agent", "note_tagging_agent", "agent_notes_agent"];
-    const isKgAgent = knowledgeGraphAgents.includes(state.agentName!);
-    const isInlineTaskAgent = state.agentName === "inline_task_agent";
-    const defaultModel = activeProvider.mode === 'byok' ? modelConfig.model : activeProvider.defaultModel;
-    const defaultKgModel = activeProvider.mode === 'byok'
-        ? defaultModel
-        : activeProvider.defaultKnowledgeGraphModel;
-    const defaultInlineTaskModel = activeProvider.mode === 'byok'
-        ? defaultModel
-        : activeProvider.defaultModel;
-    const modelId = isInlineTaskAgent
-        ? defaultInlineTaskModel
-        : (isKgAgent && modelConfig.knowledgeGraphModel)
-            ? modelConfig.knowledgeGraphModel
-            : isKgAgent ? defaultKgModel : defaultModel;
+    // model+provider were resolved and frozen on the run at runs:create time.
+    // Look up the named provider's current credentials from models.json and
+    // instantiate the LLM client. No selection happens here.
+    if (!state.runModel || !state.runProvider) {
+        throw new Error(`Run ${runId} is missing model/provider on its start event`);
+    }
+    const modelConfig = await modelConfigRepo.getConfig();
+    const modelId = state.runModel;
+    const providerMode: ActiveProviderMode =
+        state.runProvider === "rowboat" || state.runProvider === "chatgpt-codex"
+            ? state.runProvider
+            : "byok";
+    const provider = providerMode === "byok"
+        ? createProvider(await resolveProviderConfig(state.runProvider))
+        : (await resolveActiveProvider({
+            ...modelConfig,
+            providerMode,
+            model: modelId,
+        })).provider;
     const model = provider.languageModel(modelId);
-    logger.log(`using model: ${modelId}`);
+    logger.log(`using model: ${modelId} (provider: ${state.runProvider})`);
+
+    // Install use-case context for tool-internal LLM calls (e.g. parseFile)
+    // so they can tag their `llm_usage` events with the parent run's category.
+    enterUseCase({
+        useCase: state.runUseCase ?? "copilot_chat",
+        ...(state.runSubUseCase ? { subUseCase: state.runSubUseCase } : {}),
+        ...(state.agentName ? { agentName: state.agentName } : {}),
+    });
 
     let loopCounter = 0;
     let voiceInput = false;
     let voiceOutput: 'summary' | 'full' | null = null;
     let searchEnabled = false;
+    let middlePaneContext:
+        | { kind: 'note'; path: string; content: string }
+        | { kind: 'browser'; url: string; title: string }
+        | null = null;
     while (true) {
         // Check abort at the top of each iteration
         signal.throwIfAborted();
@@ -939,27 +982,40 @@ export async function* streamAgent({
                 subflow: [],
             });
             let result: unknown = null;
-            if (agent.tools![toolCall.toolName].type === "agent") {
-                const subflowState = state.subflowStates[toolCallId];
-                for await (const event of streamAgent({
-                    state: subflowState,
-                    idGenerator,
-                    runId,
-                    messageQueue,
-                    modelConfigRepo,
-                    signal,
-                    abortRegistry,
-                })) {
-                    yield* processEvent({
-                        ...event,
-                        subflow: [toolCallId, ...event.subflow],
-                    });
+            try {
+                if (agent.tools![toolCall.toolName].type === "agent") {
+                    const subflowState = state.subflowStates[toolCallId];
+                    for await (const event of streamAgent({
+                        state: subflowState,
+                        idGenerator,
+                        runId,
+                        messageQueue,
+                        modelConfigRepo,
+                        signal,
+                        abortRegistry,
+                    })) {
+                        yield* processEvent({
+                            ...event,
+                            subflow: [toolCallId, ...event.subflow],
+                        });
+                    }
+                    if (!subflowState.getPendingAskHumans().length && !subflowState.getPendingPermissions().length) {
+                        result = subflowState.finalResponse();
+                    }
+                } else {
+                    result = await execTool(agent.tools![toolCall.toolName], toolCall.arguments, { runId, signal, abortRegistry });
                 }
-                if (!subflowState.getPendingAskHumans().length && !subflowState.getPendingPermissions().length) {
-                    result = subflowState.finalResponse();
+            } catch (error) {
+                if ((error instanceof Error && error.name === "AbortError") || signal.aborted) {
+                    throw error;
                 }
-            } else {
-                result = await execTool(agent.tools![toolCall.toolName], toolCall.arguments, { runId, signal, abortRegistry });
+                const message = error instanceof Error ? (error.message || error.name) : String(error);
+                _logger.log('tool failed', message);
+                result = {
+                    success: false,
+                    error: message,
+                    toolName: toolCall.toolName,
+                };
             }
             const resultPayload = result === undefined ? null : result;
             const resultMsg: z.infer<typeof ToolMessage> = {
@@ -1006,6 +1062,9 @@ export async function* streamAgent({
             if (msg.voiceOutput) {
                 voiceOutput = msg.voiceOutput;
             }
+            // Middle pane is NOT sticky — it should reflect the state at the moment of the
+            // latest user message. If the user closed the pane between messages, clear it.
+            middlePaneContext = msg.middlePaneContext ?? null;
             loopLogger.log('dequeued user message', msg.messageId);
             yield* processEvent({
                 runId,
@@ -1052,6 +1111,19 @@ export async function* streamAgent({
             if (agentNotesContext) {
                 instructionsWithDateTime += `\n\n${agentNotesContext}`;
             }
+            // Always inject a Middle Pane section so the LLM has a clear, up-to-date signal
+            // that supersedes any earlier middle-pane mention in the conversation history.
+            const middlePaneHeader = `\n\n# Middle Pane (Current State)\nThis section reflects what the user has open in the middle pane RIGHT NOW, at the time of their latest message. **This is authoritative and overrides any earlier mention of a note or web page in this conversation** — if the conversation history references a different note or browser page, the user has since closed or navigated away from it. Do not treat earlier context as current.\n\n`;
+            if (!middlePaneContext) {
+                loopLogger.log('injecting middle pane context (empty)');
+                instructionsWithDateTime += `${middlePaneHeader}**Nothing relevant is open in the middle pane right now.** The user is not looking at any note or web page. If earlier in this conversation you referenced a note or browser page as "what the user is viewing", that is no longer accurate — do not refer to it as currently open. Answer the user's latest message on its own merits.`;
+            } else if (middlePaneContext.kind === 'note') {
+                loopLogger.log('injecting middle pane context (note)', middlePaneContext.path);
+                instructionsWithDateTime += `${middlePaneHeader}The user has a note open. Its path and full content are provided below so you can reference it when relevant.\n\n**How to use this context:**\n- The user may or may not be talking about this note. Do NOT assume every message is about it.\n- Only reference or act on this note when the user's message clearly relates to it (e.g. "this note", "what I'm looking at", "here", "above", "below", or questions whose subject is plainly this note's content).\n- For unrelated questions (general chat, questions about other notes, tasks, emails, calendar, etc.), ignore this context entirely and answer normally.\n- Do not mention that you can see this note unless it is relevant to the answer.\n\n## Open note path\n${middlePaneContext.path}\n\n## Open note content\n\`\`\`\n${middlePaneContext.content}\n\`\`\``;
+            } else if (middlePaneContext.kind === 'browser') {
+                loopLogger.log('injecting middle pane context (browser)', middlePaneContext.url);
+                instructionsWithDateTime += `${middlePaneHeader}The user has the embedded browser open and is viewing a web page. Only the URL and page title are shown below — the page content itself is NOT included here. If you need the page content to answer, use the browser tools available to you to read the page.\n\n**How to use this context:**\n- The user may or may not be talking about this page. Do NOT assume every message is about it.\n- Only reference or act on this page when the user's message clearly relates to it (e.g. "this page", "this article", "what I'm looking at", "this site", "summarize this").\n- For unrelated questions (general chat, questions about other notes, tasks, emails, calendar, etc.), ignore this context entirely and answer normally.\n- Do not mention that you can see the browser unless it is relevant to the answer.\n\n## Current page\nURL: ${middlePaneContext.url}\nTitle: ${middlePaneContext.title}`;
+            }
         }
         if (voiceInput) {
             loopLogger.log('voice input enabled, injecting voice input prompt');
@@ -1070,14 +1142,21 @@ export async function* streamAgent({
         }
         let streamError: string | null = null;
         for await (const event of streamLlm(
-            activeProvider.mode,
+            providerMode,
             modelId,
             model,
             state.messages,
             instructionsWithDateTime,
             tools,
             signal,
-            `${runId}:${state.agentName}:iter-${loopCounter}`,
+            {
+                useCase: state.runUseCase ?? "copilot_chat",
+                ...(state.runSubUseCase ? { subUseCase: state.runSubUseCase } : {}),
+                agentName: state.agentName ?? undefined,
+                modelId,
+                providerName: state.runProvider!,
+                traceLabel: `${runId}:${state.agentName}:iter-${loopCounter}`,
+            },
         )) {
             messageBuilder.ingest(event);
             yield* processEvent({
@@ -1165,6 +1244,15 @@ export async function* streamAgent({
     }
 }
 
+interface StreamLlmAnalytics {
+    useCase: UseCase;
+    subUseCase?: string;
+    agentName?: string;
+    modelId: string;
+    providerName: string;
+    traceLabel?: string;
+}
+
 async function* streamLlm(
     providerMode: ActiveProviderMode,
     modelId: string,
@@ -1173,7 +1261,7 @@ async function* streamLlm(
     instructions: string,
     tools: ToolSet,
     signal?: AbortSignal,
-    traceLabel?: string,
+    analytics?: StreamLlmAnalytics,
 ): AsyncGenerator<z.infer<typeof LlmStepStreamEvent>, void, unknown> {
     const converted = convertFromMessages(messages);
     console.log(`! SENDING payload to model: `, JSON.stringify(converted))
@@ -1185,7 +1273,7 @@ async function* streamLlm(
             system: instructions,
             tools,
             signal,
-            traceLabel,
+            traceLabel: analytics?.traceLabel,
         })) {
             yield event;
         }
@@ -1259,6 +1347,16 @@ async function* streamLlm(
                 };
                 break;
             case "finish-step":
+                if (analytics) {
+                    captureLlmUsage({
+                        useCase: analytics.useCase,
+                        ...(analytics.subUseCase ? { subUseCase: analytics.subUseCase } : {}),
+                        ...(analytics.agentName ? { agentName: analytics.agentName } : {}),
+                        model: analytics.modelId,
+                        provider: analytics.providerName,
+                        usage: event.usage,
+                    });
+                }
                 yield {
                     type: "finish-step",
                     usage: event.usage,

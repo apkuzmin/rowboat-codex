@@ -1,6 +1,6 @@
 import z from "zod";
 import container from "../di/container.js";
-import { IMessageQueue, UserMessageContentType, VoiceOutputMode } from "../application/lib/message-queue.js";
+import { IMessageQueue, UserMessageContentType, VoiceOutputMode, MiddlePaneContext } from "../application/lib/message-queue.js";
 import { AskHumanResponseEvent, ToolPermissionRequestEvent, ToolPermissionResponseEvent, CreateRunOptions, Run, ListRunsResponse, ToolPermissionAuthorizePayload, AskHumanResponsePayload } from "@x/shared/dist/runs.js";
 import { IRunsRepo } from "./repo.js";
 import { IAgentRuntime } from "../agents/runtime.js";
@@ -10,18 +10,35 @@ import { IRunsLock } from "./lock.js";
 import { forceCloseAllMcpClients } from "../mcp/mcp.js";
 import { extractCommandNames } from "../application/lib/command-executor.js";
 import { addToSecurityConfig } from "../config/security.js";
+import { loadAgent } from "../agents/runtime.js";
+import { getDefaultModelAndProvider } from "../models/defaults.js";
 
 export async function createRun(opts: z.infer<typeof CreateRunOptions>): Promise<z.infer<typeof Run>> {
     const repo = container.resolve<IRunsRepo>('runsRepo');
     const bus = container.resolve<IBus>('bus');
-    const run = await repo.create(opts);
+
+    // Resolve model+provider once at creation: opts > agent declaration > defaults.
+    // Both fields are plain strings (provider is a name, looked up at runtime).
+    const agent = await loadAgent(opts.agentId);
+    const defaults = await getDefaultModelAndProvider();
+    const model = opts.model ?? agent.model ?? defaults.model;
+    const provider = opts.provider ?? agent.provider ?? defaults.provider;
+    const useCase = opts.useCase ?? "copilot_chat";
+
+    const run = await repo.create({
+        agentId: opts.agentId,
+        model,
+        provider,
+        useCase,
+        ...(opts.subUseCase ? { subUseCase: opts.subUseCase } : {}),
+    });
     await bus.publish(run.log[0]);
     return run;
 }
 
-export async function createMessage(runId: string, message: UserMessageContentType, voiceInput?: boolean, voiceOutput?: VoiceOutputMode, searchEnabled?: boolean): Promise<string> {
+export async function createMessage(runId: string, message: UserMessageContentType, voiceInput?: boolean, voiceOutput?: VoiceOutputMode, searchEnabled?: boolean, middlePaneContext?: MiddlePaneContext): Promise<string> {
     const queue = container.resolve<IMessageQueue>('messageQueue');
-    const id = await queue.enqueue(runId, message, voiceInput, voiceOutput, searchEnabled);
+    const id = await queue.enqueue(runId, message, voiceInput, voiceOutput, searchEnabled, middlePaneContext);
     const runtime = container.resolve<IAgentRuntime>('agentRuntime');
     runtime.trigger(runId);
     return id;

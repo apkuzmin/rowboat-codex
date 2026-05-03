@@ -294,6 +294,84 @@ export function LlmSetupStep({ state }: LlmSetupStepProps) {
               </Select>
             )}
           </div>
+
+          <div className="space-y-2 min-w-0">
+            <label className="text-xs font-medium text-muted-foreground">
+              Meeting Notes Model
+            </label>
+            {modelsLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                Loading...
+              </div>
+            ) : showModelInput ? (
+              <Input
+                value={activeConfig.meetingNotesModel}
+                onChange={(e) => llmProviderMode === "byok"
+                  ? updateProviderConfig(llmProvider, { meetingNotesModel: e.target.value })
+                  : updateAccountProviderConfig("chatgpt-codex", { meetingNotesModel: e.target.value })}
+                placeholder={activeConfig.model || "Enter model"}
+              />
+            ) : (
+              <Select
+                value={activeConfig.meetingNotesModel || "__same__"}
+                onValueChange={(value) => llmProviderMode === "byok"
+                  ? updateProviderConfig(llmProvider, { meetingNotesModel: value === "__same__" ? "" : value })
+                  : updateAccountProviderConfig("chatgpt-codex", { meetingNotesModel: value === "__same__" ? "" : value })}
+              >
+                <SelectTrigger className="w-full truncate">
+                  <SelectValue placeholder="Select a model" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__same__">Same as assistant</SelectItem>
+                  {modelsForProvider.map((model) => (
+                    <SelectItem key={model.id} value={model.id}>
+                      {model.name || model.id}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+
+          <div className="space-y-2 min-w-0">
+            <label className="text-xs font-medium text-muted-foreground">
+              Track Block Model
+            </label>
+            {modelsLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                Loading...
+              </div>
+            ) : showModelInput ? (
+              <Input
+                value={activeConfig.trackBlockModel}
+                onChange={(e) => llmProviderMode === "byok"
+                  ? updateProviderConfig(llmProvider, { trackBlockModel: e.target.value })
+                  : updateAccountProviderConfig("chatgpt-codex", { trackBlockModel: e.target.value })}
+                placeholder={activeConfig.model || "Enter model"}
+              />
+            ) : (
+              <Select
+                value={activeConfig.trackBlockModel || "__same__"}
+                onValueChange={(value) => llmProviderMode === "byok"
+                  ? updateProviderConfig(llmProvider, { trackBlockModel: value === "__same__" ? "" : value })
+                  : updateAccountProviderConfig("chatgpt-codex", { trackBlockModel: value === "__same__" ? "" : value })}
+              >
+                <SelectTrigger className="w-full truncate">
+                  <SelectValue placeholder="Select a model" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__same__">Same as assistant</SelectItem>
+                  {modelsForProvider.map((model) => (
+                    <SelectItem key={model.id} value={model.id}>
+                      {model.name || model.id}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
         </div>
 
         {llmProviderMode === "chatgpt-codex" && (selectedCatalogMeta.invalidSavedModels?.length || selectedCatalogMeta.catalogSource === "fallback") && (

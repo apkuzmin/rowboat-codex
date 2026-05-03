@@ -19,12 +19,12 @@ const CHATGPT_CODEX_SCOPES = 'openid email profile offline_access';
 const DEVICE_POLL_TIMEOUT_MS = 15 * 60 * 1000;
 const REFRESH_LEEWAY_SECONDS = 60;
 
-const CodexTokenBundleSchema = z.object({
-  accessToken: z.string(),
-  refreshToken: z.string().nullable(),
-  idToken: z.string().nullable(),
-  expiresIn: z.number().int().positive(),
-});
+type CodexTokenBundle = {
+  accessToken: string;
+  refreshToken: string | null;
+  idToken: string | null;
+  expiresIn: number;
+};
 
 const RawCodexTokenBundleSchema = z.object({
   access_token: z.string(),
@@ -113,7 +113,7 @@ function parseCodexClaims(idToken?: string | null): CodexConnectionMetadata {
   }
 }
 
-function toTokenRecord(bundle: z.infer<typeof CodexTokenBundleSchema>, fallbackRefreshToken?: string | null): CodexTokenRecord {
+function toTokenRecord(bundle: CodexTokenBundle, fallbackRefreshToken?: string | null): CodexTokenRecord {
   const expiresAt = Math.floor(Date.now() / 1000) + bundle.expiresIn;
   const metadata = parseCodexClaims(bundle.idToken);
   const refreshToken = bundle.refreshToken ?? fallbackRefreshToken ?? null;

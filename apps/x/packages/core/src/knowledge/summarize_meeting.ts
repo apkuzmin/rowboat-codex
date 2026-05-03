@@ -5,6 +5,7 @@ import type { IModelConfigRepo } from '../models/repo.js';
 import { resolveActiveProvider } from '../models/active-provider.js';
 import { generateTextForProvider } from '../models/text-generation.js';
 import { WorkDir } from '../config/config.js';
+import { captureLlmUsage } from '../analytics/usage.js';
 
 const CALENDAR_SYNC_DIR = path.join(WorkDir, 'calendar_sync');
 
@@ -142,6 +143,7 @@ export async function summarizeMeeting(transcript: string, meetingStartTime?: st
     const provider = activeProvider.provider;
     const modelId = config.meetingNotesModel
         || (activeProvider.mode === 'byok' ? config.model : activeProvider.defaultMeetingNotesModel);
+    const providerName = config.providerMode === 'byok' ? config.provider.flavor : activeProvider.mode;
     const model = provider.languageModel(modelId);
 
     // If a specific calendar event was linked, use it directly.
@@ -159,6 +161,13 @@ export async function summarizeMeeting(transcript: string, meetingStartTime?: st
         model,
         system: SYSTEM_PROMPT,
         prompt,
+    });
+
+    captureLlmUsage({
+        useCase: 'meeting_note',
+        model: modelId,
+        provider: providerName,
+        usage: result.usage,
     });
 
     return result.text.trim();

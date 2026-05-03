@@ -3,7 +3,8 @@ import path from 'path';
 import { google } from 'googleapis';
 import { WorkDir } from '../config/config.js';
 import { createRun, createMessage } from '../runs/runs.js';
-import { bus } from '../runs/bus.js';
+import { getKgModel } from '../models/defaults.js';
+import { waitForRunCompletion } from '../agents/utils.js';
 import { serviceLogger } from '../services/service_logger.js';
 import { loadUserConfig, updateUserEmail } from '../config/user_config.js';
 import { GoogleClientFactory } from './google-client-factory.js';
@@ -190,19 +191,6 @@ function extractConversationMessages(runFilePath: string): { role: string; text:
     return messages;
 }
 
-// --- Wait for agent run completion ---
-
-async function waitForRunCompletion(runId: string): Promise<void> {
-    return new Promise(async (resolve) => {
-        const unsubscribe = await bus.subscribe('*', async (event) => {
-            if (event.type === 'run-processing-end' && event.runId === runId) {
-                unsubscribe();
-                resolve();
-            }
-        });
-    });
-}
-
 // --- User email resolution ---
 
 async function ensureUserEmail(): Promise<string | null> {
@@ -318,7 +306,12 @@ async function processAgentNotes(): Promise<void> {
         const timestamp = new Date().toISOString();
         const message = `Current timestamp: ${timestamp}\n\nProcess the following source material and update the Agent Notes folder accordingly.\n\n${messageParts.join('\n\n')}`;
 
-        const agentRun = await createRun({ agentId: AGENT_ID });
+        const agentRun = await createRun({
+            agentId: AGENT_ID,
+            model: await getKgModel(),
+            useCase: 'knowledge_sync',
+            subUseCase: 'agent_notes',
+        });
         await createMessage(agentRun.id, message);
         await waitForRunCompletion(agentRun.id);
 

@@ -187,12 +187,14 @@ interface ByokProviderConfig {
   models: string[]
   knowledgeGraphModel: string
   meetingNotesModel: string
+  trackBlockModel: string
 }
 
 interface AccountProviderConfig {
   models: string[]
   knowledgeGraphModel: string
   meetingNotesModel: string
+  trackBlockModel: string
 }
 
 type AccountProviderSavePayload = {
@@ -201,6 +203,7 @@ type AccountProviderSavePayload = {
   models: string[]
   knowledgeGraphModel?: string
   meetingNotesModel?: string
+  trackBlockModel?: string
 }
 
 type SaveConfigInvokePayload =
@@ -217,6 +220,7 @@ type SaveConfigInvokePayload =
       models: string[]
       knowledgeGraphModel?: string
       meetingNotesModel?: string
+      trackBlockModel?: string
     }
 
 function normalizeModelList(models: string[], primaryModel?: string): string[] {
@@ -239,6 +243,7 @@ function buildAccountProviderSavePayload(
     models,
     knowledgeGraphModel: config.knowledgeGraphModel.trim() || undefined,
     meetingNotesModel: config.meetingNotesModel.trim() || undefined,
+    trackBlockModel: config.trackBlockModel.trim() || undefined,
   }
 }
 
@@ -282,17 +287,17 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
   const [provider, setProvider] = useState<LlmProviderFlavor>("openai")
   const [defaultProvider, setDefaultProvider] = useState<LlmProviderFlavor | null>(null)
   const [providerConfigs, setProviderConfigs] = useState<Record<LlmProviderFlavor, ByokProviderConfig>>({
-    openai: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
-    anthropic: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
-    google: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
-    openrouter: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
-    aigateway: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
-    ollama: { apiKey: "", baseURL: "http://localhost:11434", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
-    "openai-compatible": { apiKey: "", baseURL: "http://localhost:1234/v1", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
+    openai: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
+    anthropic: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
+    google: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
+    openrouter: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
+    aigateway: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
+    ollama: { apiKey: "", baseURL: "http://localhost:11434", models: [""], knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
+    "openai-compatible": { apiKey: "", baseURL: "http://localhost:1234/v1", models: [""], knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
   })
   const [accountConfigs, setAccountConfigs] = useState<Record<AccountProviderMode, AccountProviderConfig>>({
-    rowboat: { models: ["gpt-5.4"], knowledgeGraphModel: "gpt-5.4-mini", meetingNotesModel: "gpt-5.4" },
-    "chatgpt-codex": { models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
+    rowboat: { models: ["gpt-5.4"], knowledgeGraphModel: "gpt-5.4-mini", meetingNotesModel: "gpt-5.4", trackBlockModel: "" },
+    "chatgpt-codex": { models: [""], knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
   })
   const [modelsCatalog, setModelsCatalog] = useState<Record<string, LlmModelOption[]>>({})
   const [catalogMeta, setCatalogMeta] = useState<Record<string, ProviderCatalogMeta>>({})
@@ -305,6 +310,7 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
   const activeByokConfig = providerConfigs[provider]
   const activeAccountMode = providerMode === "byok" ? null : providerMode
   const activeAccountConfig = activeAccountMode ? accountConfigs[activeAccountMode] : null
+  const activeConfig = providerMode === "byok" ? activeByokConfig : (activeAccountConfig ?? activeByokConfig)
   const activeModels = activeAccountConfig?.models ?? activeByokConfig.models
   const primaryModel = activeModels[0] || ""
   const accountStatus = activeAccountMode ? providerStatus[activeAccountMode] : undefined
@@ -449,6 +455,7 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
                     models: savedModels,
                     knowledgeGraphModel: e.knowledgeGraphModel || "",
                     meetingNotesModel: e.meetingNotesModel || "",
+                    trackBlockModel: e.trackBlockModel || "",
                   };
                 }
               }
@@ -464,6 +471,7 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
                 models: activeModels.length > 0 ? activeModels : [""],
                 knowledgeGraphModel: parsed.knowledgeGraphModel || "",
                 meetingNotesModel: parsed.meetingNotesModel || "",
+                trackBlockModel: parsed.trackBlockModel || "",
               };
             }
             return next;
@@ -475,8 +483,9 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
                 models: Array.isArray(parsed.models) && parsed.models.length > 0
                   ? parsed.models
                   : parsed.model ? [parsed.model] : prev[savedMode].models,
-                knowledgeGraphModel: parsed.knowledgeGraphModel || prev[savedMode].knowledgeGraphModel,
-                meetingNotesModel: parsed.meetingNotesModel || prev[savedMode].meetingNotesModel,
+                knowledgeGraphModel: parsed.knowledgeGraphModel || "",
+                meetingNotesModel: parsed.meetingNotesModel || "",
+                trackBlockModel: parsed.trackBlockModel || "",
               },
             }))
           }
@@ -552,6 +561,7 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
       || models.find((model) => model.id.toLowerCase().includes("mini"))?.id
       || defaultModel
     const defaultMeetingNotesModel = meta.defaultMeetingNotesModel || defaultKnowledgeGraphModel
+    const defaultTrackBlockModel = models.find((model) => model.id.toLowerCase().includes("haiku"))?.id || defaultKnowledgeGraphModel
     setAccountConfigs(prev => {
       const current = prev[providerMode]
       const normalizedModels = [...new Set(
@@ -567,11 +577,15 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
       const nextMeetingNotesModel = current.meetingNotesModel && validIds.has(current.meetingNotesModel)
         ? current.meetingNotesModel
         : defaultMeetingNotesModel
+      const nextTrackBlockModel = current.trackBlockModel && validIds.has(current.trackBlockModel)
+        ? current.trackBlockModel
+        : defaultTrackBlockModel
 
       if (
         JSON.stringify(nextModels) === JSON.stringify(current.models) &&
         nextKnowledgeGraphModel === current.knowledgeGraphModel &&
-        nextMeetingNotesModel === current.meetingNotesModel
+        nextMeetingNotesModel === current.meetingNotesModel &&
+        nextTrackBlockModel === current.trackBlockModel
       ) {
         return prev
       }
@@ -582,6 +596,7 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
           models: nextModels,
           knowledgeGraphModel: nextKnowledgeGraphModel,
           meetingNotesModel: nextMeetingNotesModel,
+          trackBlockModel: nextTrackBlockModel,
         },
       }
     })
@@ -603,6 +618,7 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
         models: allModels,
         knowledgeGraphModel: activeByokConfig.knowledgeGraphModel.trim() || undefined,
         meetingNotesModel: activeByokConfig.meetingNotesModel.trim() || undefined,
+        trackBlockModel: activeByokConfig.trackBlockModel.trim() || undefined,
       }
       const result = await window.ipc.invoke("models:test", providerConfig)
       if (result.success) {
@@ -651,6 +667,7 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
         models: allModels,
         knowledgeGraphModel: config.knowledgeGraphModel.trim() || undefined,
         meetingNotesModel: config.meetingNotesModel.trim() || undefined,
+        trackBlockModel: config.trackBlockModel.trim() || undefined,
       })
       setProviderMode("byok")
       setDefaultProvider(prov)
@@ -681,6 +698,7 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
         parsed.models = defModels
         parsed.knowledgeGraphModel = defConfig.knowledgeGraphModel.trim() || undefined
         parsed.meetingNotesModel = defConfig.meetingNotesModel.trim() || undefined
+        parsed.trackBlockModel = defConfig.trackBlockModel.trim() || undefined
       }
       await window.ipc.invoke("workspace:writeFile", {
         path: "config/models.json",
@@ -688,7 +706,7 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
       })
       setProviderConfigs(prev => ({
         ...prev,
-        [prov]: { apiKey: "", baseURL: defaultBaseURLs[prov] || "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "" },
+        [prov]: { apiKey: "", baseURL: defaultBaseURLs[prov] || "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
       }))
       setTestState({ status: "idle" })
       window.dispatchEvent(new Event('models-config-changed'))
@@ -928,6 +946,98 @@ function ModelSettings({ dialogOpen }: { dialogOpen: boolean }) {
                   updateConfig(provider, { knowledgeGraphModel: value === "__same__" ? "" : value })
                 } else if (activeAccountMode) {
                   updateAccountConfig(activeAccountMode, { knowledgeGraphModel: value === "__same__" ? "" : value })
+                }
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select a model" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__same__">Same as assistant</SelectItem>
+                {modelsForProvider.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.name || m.id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+
+        {/* Meeting notes model */}
+        <div className="space-y-2">
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Meeting notes model</span>
+          {modelsLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              Loading...
+            </div>
+          ) : showModelInput ? (
+            <Input
+              value={activeConfig.meetingNotesModel}
+              onChange={(e) => {
+                if (providerMode === "byok") {
+                  updateConfig(provider, { meetingNotesModel: e.target.value })
+                } else if (activeAccountMode) {
+                  updateAccountConfig(activeAccountMode, { meetingNotesModel: e.target.value })
+                }
+              }}
+              placeholder={primaryModel || "Enter model"}
+            />
+          ) : (
+            <Select
+              value={activeConfig.meetingNotesModel || "__same__"}
+              onValueChange={(value) => {
+                if (providerMode === "byok") {
+                  updateConfig(provider, { meetingNotesModel: value === "__same__" ? "" : value })
+                } else if (activeAccountMode) {
+                  updateAccountConfig(activeAccountMode, { meetingNotesModel: value === "__same__" ? "" : value })
+                }
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select a model" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__same__">Same as assistant</SelectItem>
+                {modelsForProvider.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.name || m.id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+
+        {/* Track block model */}
+        <div className="space-y-2">
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Track block model</span>
+          {modelsLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              Loading...
+            </div>
+          ) : showModelInput ? (
+            <Input
+              value={activeConfig.trackBlockModel}
+              onChange={(e) => {
+                if (providerMode === "byok") {
+                  updateConfig(provider, { trackBlockModel: e.target.value })
+                } else if (activeAccountMode) {
+                  updateAccountConfig(activeAccountMode, { trackBlockModel: e.target.value })
+                }
+              }}
+              placeholder={primaryModel || "Enter model"}
+            />
+          ) : (
+            <Select
+              value={activeConfig.trackBlockModel || "__same__"}
+              onValueChange={(value) => {
+                if (providerMode === "byok") {
+                  updateConfig(provider, { trackBlockModel: value === "__same__" ? "" : value })
+                } else if (activeAccountMode) {
+                  updateAccountConfig(activeAccountMode, { trackBlockModel: value === "__same__" ? "" : value })
                 }
               }}
             >

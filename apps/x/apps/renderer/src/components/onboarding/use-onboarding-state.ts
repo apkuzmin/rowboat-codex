@@ -37,6 +37,7 @@ type AccountProviderSavePayload = {
   models: string[]
   knowledgeGraphModel?: string
   meetingNotesModel?: string
+  trackBlockModel?: string
 }
 
 function normalizeModelList(models: string[], primaryModel?: string): string[] {
@@ -49,8 +50,8 @@ function normalizeModelList(models: string[], primaryModel?: string): string[] {
 
 function buildAccountProviderSavePayload(
   providerMode: AccountProviderMode,
-  config: { model: string; knowledgeGraphModel: string },
-  previousConfig?: { model?: string; models?: string[]; meetingNotesModel?: string },
+  config: { model: string; knowledgeGraphModel: string; meetingNotesModel: string; trackBlockModel: string },
+  previousConfig?: { model?: string; models?: string[]; meetingNotesModel?: string; trackBlockModel?: string },
 ): AccountProviderSavePayload {
   const models = normalizeModelList(
     Array.isArray(previousConfig?.models) ? previousConfig.models : [config.model],
@@ -61,7 +62,8 @@ function buildAccountProviderSavePayload(
     model: models[0] || config.model.trim(),
     models,
     knowledgeGraphModel: config.knowledgeGraphModel.trim() || undefined,
-    meetingNotesModel: previousConfig?.meetingNotesModel?.trim() || undefined,
+    meetingNotesModel: config.meetingNotesModel.trim() || previousConfig?.meetingNotesModel?.trim() || undefined,
+    trackBlockModel: config.trackBlockModel.trim() || previousConfig?.trackBlockModel?.trim() || undefined,
   }
 }
 
@@ -77,17 +79,17 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
   const [catalogMeta, setCatalogMeta] = useState<Record<string, ProviderCatalogMeta>>({})
   const [modelsLoading, setModelsLoading] = useState(false)
   const [modelsError, setModelsError] = useState<string | null>(null)
-  const [providerConfigs, setProviderConfigs] = useState<Record<LlmProviderFlavor, { apiKey: string; baseURL: string; model: string; knowledgeGraphModel: string }>>({
-    openai: { apiKey: "", baseURL: "", model: "", knowledgeGraphModel: "" },
-    anthropic: { apiKey: "", baseURL: "", model: "", knowledgeGraphModel: "" },
-    google: { apiKey: "", baseURL: "", model: "", knowledgeGraphModel: "" },
-    openrouter: { apiKey: "", baseURL: "", model: "", knowledgeGraphModel: "" },
-    aigateway: { apiKey: "", baseURL: "", model: "", knowledgeGraphModel: "" },
-    ollama: { apiKey: "", baseURL: "http://localhost:11434", model: "", knowledgeGraphModel: "" },
-    "openai-compatible": { apiKey: "", baseURL: "http://localhost:1234/v1", model: "", knowledgeGraphModel: "" },
+  const [providerConfigs, setProviderConfigs] = useState<Record<LlmProviderFlavor, { apiKey: string; baseURL: string; model: string; knowledgeGraphModel: string; meetingNotesModel: string; trackBlockModel: string }>>({
+    openai: { apiKey: "", baseURL: "", model: "", knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
+    anthropic: { apiKey: "", baseURL: "", model: "", knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
+    google: { apiKey: "", baseURL: "", model: "", knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
+    openrouter: { apiKey: "", baseURL: "", model: "", knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
+    aigateway: { apiKey: "", baseURL: "", model: "", knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
+    ollama: { apiKey: "", baseURL: "http://localhost:11434", model: "", knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
+    "openai-compatible": { apiKey: "", baseURL: "http://localhost:1234/v1", model: "", knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
   })
-  const [accountProviderConfigs, setAccountProviderConfigs] = useState<Record<AccountProviderMode, { model: string; knowledgeGraphModel: string }>>({
-    'chatgpt-codex': { model: "", knowledgeGraphModel: "" },
+  const [accountProviderConfigs, setAccountProviderConfigs] = useState<Record<AccountProviderMode, { model: string; knowledgeGraphModel: string; meetingNotesModel: string; trackBlockModel: string }>>({
+    'chatgpt-codex': { model: "", knowledgeGraphModel: "", meetingNotesModel: "", trackBlockModel: "" },
   })
   const [testState, setTestState] = useState<{ status: "idle" | "testing" | "success" | "error"; error?: string }>({
     status: "idle",
@@ -133,7 +135,7 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
   const [googleCalendarConnecting, setGoogleCalendarConnecting] = useState(false)
 
   const updateProviderConfig = useCallback(
-    (provider: LlmProviderFlavor, updates: Partial<{ apiKey: string; baseURL: string; model: string; knowledgeGraphModel: string }>) => {
+    (provider: LlmProviderFlavor, updates: Partial<{ apiKey: string; baseURL: string; model: string; knowledgeGraphModel: string; meetingNotesModel: string; trackBlockModel: string }>) => {
       setProviderConfigs(prev => ({
         ...prev,
         [provider]: { ...prev[provider], ...updates },
@@ -144,7 +146,7 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
   )
 
   const updateAccountProviderConfig = useCallback(
-    (provider: AccountProviderMode, updates: Partial<{ model: string; knowledgeGraphModel: string }>) => {
+    (provider: AccountProviderMode, updates: Partial<{ model: string; knowledgeGraphModel: string; meetingNotesModel: string; trackBlockModel: string }>) => {
       setAccountProviderConfigs(prev => ({
         ...prev,
         [provider]: { ...prev[provider], ...updates },
@@ -286,16 +288,35 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
     const defaultKnowledgeGraphModel = meta.defaultKnowledgeGraphModel
       || models.find((model) => model.id.toLowerCase().includes('mini'))?.id
       || defaultModel
+    const defaultMeetingNotesModel = meta.defaultMeetingNotesModel || defaultKnowledgeGraphModel
+    const defaultTrackBlockModel = models.find((model) => model.id.toLowerCase().includes('mini'))?.id || defaultKnowledgeGraphModel
     setAccountProviderConfigs(prev => {
       const current = prev[llmProviderMode]
       const nextModel = current.model && validIds.has(current.model) ? current.model : defaultModel
       const nextKnowledgeGraphModel = current.knowledgeGraphModel && validIds.has(current.knowledgeGraphModel)
         ? current.knowledgeGraphModel
         : defaultKnowledgeGraphModel
-      if (nextModel === current.model && nextKnowledgeGraphModel === current.knowledgeGraphModel) return prev
+      const nextMeetingNotesModel = current.meetingNotesModel && validIds.has(current.meetingNotesModel)
+        ? current.meetingNotesModel
+        : defaultMeetingNotesModel
+      const nextTrackBlockModel = current.trackBlockModel && validIds.has(current.trackBlockModel)
+        ? current.trackBlockModel
+        : defaultTrackBlockModel
+      if (
+        nextModel === current.model &&
+        nextKnowledgeGraphModel === current.knowledgeGraphModel &&
+        nextMeetingNotesModel === current.meetingNotesModel &&
+        nextTrackBlockModel === current.trackBlockModel
+      ) return prev
       return {
         ...prev,
-        [llmProviderMode]: { ...current, model: nextModel, knowledgeGraphModel: nextKnowledgeGraphModel },
+        [llmProviderMode]: {
+          ...current,
+          model: nextModel,
+          knowledgeGraphModel: nextKnowledgeGraphModel,
+          meetingNotesModel: nextMeetingNotesModel,
+          trackBlockModel: nextTrackBlockModel,
+        },
       }
     })
   }, [catalogMeta, llmProviderMode, modelsCatalog])
@@ -544,6 +565,14 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
         const byokConfig = providerConfigs[llmProvider]
         const apiKey = byokConfig.apiKey.trim() || undefined
         const baseURL = byokConfig.baseURL.trim() || undefined
+        const testConfig = {
+          provider: {
+            flavor: llmProvider,
+            apiKey,
+            baseURL,
+          },
+          model,
+        }
         const providerConfig = {
           providerMode: "byok" as const,
           provider: {
@@ -553,8 +582,10 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
           },
           model,
           knowledgeGraphModel,
+          meetingNotesModel: byokConfig.meetingNotesModel.trim() || undefined,
+          trackBlockModel: byokConfig.trackBlockModel.trim() || undefined,
         }
-        const result = await window.ipc.invoke("models:test", providerConfig)
+        const result = await window.ipc.invoke("models:test", testConfig)
         if (!result.success) {
           setTestState({ status: "error", error: result.error })
           toast.error(result.error || "Connection test failed")
@@ -566,7 +597,7 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
         handleNext()
         return
       }
-      let previousAccountConfig: { model?: string; models?: string[]; meetingNotesModel?: string } | undefined
+      let previousAccountConfig: { model?: string; models?: string[]; meetingNotesModel?: string; trackBlockModel?: string } | undefined
       try {
         const result = await window.ipc.invoke("workspace:readFile", { path: "config/models.json" })
         const parsed = JSON.parse(result.data)
@@ -575,6 +606,7 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
             model: typeof parsed?.model === "string" ? parsed.model : undefined,
             models: Array.isArray(parsed?.models) ? parsed.models : undefined,
             meetingNotesModel: typeof parsed?.meetingNotesModel === "string" ? parsed.meetingNotesModel : undefined,
+            trackBlockModel: typeof parsed?.trackBlockModel === "string" ? parsed.trackBlockModel : undefined,
           }
         }
       } catch {
@@ -585,6 +617,8 @@ export function useOnboardingState(open: boolean, onComplete: () => void) {
         {
           model,
           knowledgeGraphModel: knowledgeGraphModel || "",
+          meetingNotesModel: activeConfig.meetingNotesModel || "",
+          trackBlockModel: activeConfig.trackBlockModel || "",
         },
         previousAccountConfig,
       ))
