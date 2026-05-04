@@ -9,6 +9,7 @@ import { parseFrontmatter } from "../application/lib/parse-frontmatter.js";
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const UpdateAgentSchema = Agent.omit({ name: true });
+const ReadAgentFrontmatterSchema = Agent.omit({ name: true, instructions: true });
 
 export interface IAgentsRepo {
     list(): Promise<z.infer<typeof Agent>[]>;
@@ -51,12 +52,11 @@ export class FSAgentsRepo implements IAgentsRepo {
 
         const { frontmatter, content } = parseFrontmatter(raw);
         if (frontmatter) {
-            const parsed = Agent
-                .omit({ instructions: true })
-                .parse(frontmatter);
+            const parsed = ReadAgentFrontmatterSchema.parse(frontmatter);
 
             return {
                 ...parsed,
+                name: filepath,
                 instructions: content,
             };
         }

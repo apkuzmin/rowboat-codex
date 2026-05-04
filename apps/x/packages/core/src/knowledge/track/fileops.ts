@@ -9,18 +9,23 @@ import { withFileLock } from '../file-lock.js';
 
 const KNOWLEDGE_DIR = path.join(WorkDir, 'knowledge');
 
-function absPath(filePath: string): string {
-    return path.join(KNOWLEDGE_DIR, filePath);
-}
-
-export async function fetchAll(filePath: string): Promise<z.infer<typeof TrackStateSchema>[]> {
-    let content: string;
-    try {
-        content = await fs.readFile(absPath(filePath), 'utf-8');
-    } catch {
-        return [];
+function resolveKnowledgePath(filePath: string): string {
+    if (path.isAbsolute(filePath)) {
+        throw new Error(`Unsafe knowledge file path: ${filePath}`);
     }
 
+    const knowledgeRoot = path.resolve(KNOWLEDGE_DIR);
+    const resolved = path.resolve(knowledgeRoot, filePath);
+    const relative = path.relative(knowledgeRoot, resolved);
+
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+        throw new Error(`Unsafe knowledge file path: ${filePath}`);
+    }
+
+    return resolved;
+}
+
+function parseTrackBlocks(content: string): z.infer<typeof TrackStateSchema>[] {
     const lines = content.split('\n');
     const blocks: z.infer<typeof TrackStateSchema>[] = [];
     let i = 0;
@@ -65,6 +70,17 @@ export async function fetchAll(filePath: string): Promise<z.infer<typeof TrackSt
     return blocks;
 }
 
+export async function fetchAll(filePath: string): Promise<z.infer<typeof TrackStateSchema>[]> {
+    let content: string;
+    try {
+        content = await fs.readFile(resolveKnowledgePath(filePath), 'utf-8');
+    } catch {
+        return [];
+    }
+
+    return parseTrackBlocks(content);
+}
+
 export async function fetch(filePath: string, trackId: string): Promise<z.infer<typeof TrackStateSchema> | null> {
     const blocks = await fetchAll(filePath);
     return blocks.find(b => b.track.trackId === trackId) ?? null;
@@ -82,8 +98,9 @@ export async function fetchYaml(filePath: string, trackId: string): Promise<stri
 }
 
 export async function updateContent(filePath: string, trackId: string, newContent: string): Promise<void> {
-    return withFileLock(absPath(filePath), async () => {
-        let content = await fs.readFile(absPath(filePath), 'utf-8');
+    const targetPath = resolveKnowledgePath(filePath);
+    return withFileLock(targetPath, async () => {
+        let content = await fs.readFile(targetPath, 'utf-8');
         const openTag = `<!--track-target:${trackId}-->`;
         const closeTag = `<!--/track-target:${trackId}-->`;
         const openIdx = content.indexOf(openTag);
@@ -91,7 +108,7 @@ export async function updateContent(filePath: string, trackId: string, newConten
         if (openIdx !== -1 && closeIdx !== -1 && closeIdx > openIdx) {
             content = content.slice(0, openIdx + openTag.length) + '\n' + newContent + '\n' + content.slice(closeIdx);
         } else {
-            const block = await fetch(filePath, trackId);
+            const block = parseTrackBlocks(content).find(b => b.track.trackId === trackId);
             if (!block) {
                 throw new Error(`Track ${trackId} not found in ${filePath}`);
             }
@@ -101,26 +118,27 @@ export async function updateContent(filePath: string, trackId: string, newConten
             lines.splice(insertAt, 0, ...contentFence);
             content = lines.join('\n');
         }
-        await fs.writeFile(absPath(filePath), content, 'utf-8');
+        await fs.writeFile(targetPath, content, 'utf-8');
     });
 }
 
 export async function updateTrackBlock(filepath: string, trackId: string, updates: Partial<z.infer<typeof TrackBlockSchema>>): Promise<void> {
-    return withFileLock(absPath(filepath), async () => {
-        const block = await fetch(filepath, trackId);
+    const targetPath = resolveKnowledgePath(filepath);
+    return withFileLock(targetPath, async () => {
+        let content = await fs.readFile(targetPath, 'utf-8');
+        const block = parseTrackBlocks(content).find(b => b.track.trackId === trackId);
         if (!block) {
             throw new Error(`Track ${trackId} not found in ${filepath}`);
         }
         block.track = { ...block.track, ...updates };
 
         // read file contents
-        let content = await fs.readFile(absPath(filepath), 'utf-8');
         const lines = content.split('\n');
         const yaml = stringifyYaml(block.track).trimEnd();
         const yamlLines = yaml ? yaml.split('\n') : [];
         lines.splice(block.fenceStart, block.fenceEnd - block.fenceStart + 1, '```track', ...yamlLines, '```');
         content = lines.join('\n');
-        await fs.writeFile(absPath(filepath), content, 'utf-8');
+        await fs.writeFile(targetPath, content, 'utf-8');
     });
 }
 
@@ -132,8 +150,10 @@ export async function updateTrackBlock(filepath: string, trackId: string, update
  * otherwise the write is rejected.
  */
 export async function replaceTrackBlockYaml(filePath: string, trackId: string, newYaml: string): Promise<void> {
-    return withFileLock(absPath(filePath), async () => {
-        const block = await fetch(filePath, trackId);
+    const targetPath = resolveKnowledgePath(filePath);
+    return withFileLock(targetPath, async () => {
+        const content = await fs.readFile(targetPath, 'utf-8');
+        const block = parseTrackBlocks(content).find(b => b.track.trackId === trackId);
         if (!block) {
             throw new Error(`Track ${trackId} not found in ${filePath}`);
         }
@@ -145,11 +165,10 @@ export async function replaceTrackBlockYaml(filePath: string, trackId: string, n
             throw new Error(`trackId cannot be changed (was "${trackId}", got "${parsed.data.trackId}")`);
         }
 
-        const content = await fs.readFile(absPath(filePath), 'utf-8');
         const lines = content.split('\n');
         const yamlLines = newYaml.trimEnd().split('\n');
         lines.splice(block.fenceStart, block.fenceEnd - block.fenceStart + 1, '```track', ...yamlLines, '```');
-        await fs.writeFile(absPath(filePath), lines.join('\n'), 'utf-8');
+        await fs.writeFile(targetPath, lines.join('\n'), 'utf-8');
     });
 }
 
@@ -157,14 +176,15 @@ export async function replaceTrackBlockYaml(filePath: string, trackId: string, n
  * Remove a track block and its sibling target region from the file.
  */
 export async function deleteTrackBlock(filePath: string, trackId: string): Promise<void> {
-    return withFileLock(absPath(filePath), async () => {
-        const block = await fetch(filePath, trackId);
+    const targetPath = resolveKnowledgePath(filePath);
+    return withFileLock(targetPath, async () => {
+        const content = await fs.readFile(targetPath, 'utf-8');
+        const block = parseTrackBlocks(content).find(b => b.track.trackId === trackId);
         if (!block) {
             // Already gone — treat as success.
             return;
         }
 
-        const content = await fs.readFile(absPath(filePath), 'utf-8');
         const lines = content.split('\n');
         const openTag = `<!--track-target:${trackId}-->`;
         const closeTag = `<!--/track-target:${trackId}-->`;
@@ -194,6 +214,6 @@ export async function deleteTrackBlock(filePath: string, trackId: string): Promi
             }
         }
 
-        await fs.writeFile(absPath(filePath), lines.join('\n'), 'utf-8');
+        await fs.writeFile(targetPath, lines.join('\n'), 'utf-8');
     });
 }
