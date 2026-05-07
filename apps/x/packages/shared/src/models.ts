@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const LlmProvider = z.object({
-  flavor: z.enum(["openai", "anthropic", "google", "openrouter", "aigateway", "ollama", "openai-compatible"]),
+  flavor: z.enum(["openai", "anthropic", "google", "openrouter", "aigateway", "ollama", "openai-compatible", "rowboat"]),
   apiKey: z.string().optional(),
   baseURL: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
@@ -12,8 +12,16 @@ export const LlmProviderMode = z.enum(["byok", "rowboat", "chatgpt-codex"]);
 const BaseModelSelection = {
   model: z.string(),
   models: z.array(z.string()).optional(),
+  providers: z.record(z.string(), z.object({
+    apiKey: z.string().optional(),
+    baseURL: z.string().optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+    model: z.string().optional(),
+    models: z.array(z.string()).optional(),
+  })).optional(),
   knowledgeGraphModel: z.string().optional(),
   meetingNotesModel: z.string().optional(),
+  trackBlockModel: z.string().optional(),
 };
 
 const LlmByokModelConfig = z.object({
@@ -23,10 +31,9 @@ const LlmByokModelConfig = z.object({
 });
 
 const LlmAccountModelConfig = z.object({
-  model: z.string(),
-  models: z.array(z.string()).optional(),
-  knowledgeGraphModel: z.string().optional(),
-  meetingNotesModel: z.string().optional(),
+  // Per-category model overrides (BYOK only — signed-in users always get
+  // the curated gateway defaults). Read by helpers in core/models/defaults.ts.
+  ...BaseModelSelection,
 });
 
 export const LlmModelConfig = z.preprocess((value) => {

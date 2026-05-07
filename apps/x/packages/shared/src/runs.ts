@@ -19,6 +19,17 @@ export const RunProcessingEndEvent = BaseRunEvent.extend({
 export const StartEvent = BaseRunEvent.extend({
     type: z.literal("start"),
     agentName: z.string(),
+    model: z.string(),
+    provider: z.string(),
+    // useCase/subUseCase tag the run for analytics. Optional on read so legacy
+    // run files written before these fields existed still parse cleanly.
+    useCase: z.enum([
+        "copilot_chat",
+        "track_block",
+        "meeting_note",
+        "knowledge_sync",
+    ]).optional(),
+    subUseCase: z.string().optional(),
 });
 
 export const SpawnSubFlowEvent = BaseRunEvent.extend({
@@ -116,11 +127,22 @@ export const AskHumanResponsePayload = AskHumanResponseEvent.pick({
     response: true,
 });
 
+export const UseCase = z.enum([
+    "copilot_chat",
+    "track_block",
+    "meeting_note",
+    "knowledge_sync",
+]);
+
 export const Run = z.object({
     id: z.string(),
     title: z.string().optional(),
     createdAt: z.iso.datetime(),
     agentId: z.string(),
+    model: z.string(),
+    provider: z.string(),
+    useCase: UseCase.optional(),
+    subUseCase: z.string().optional(),
     log: z.array(RunEvent),
 });
 
@@ -134,6 +156,10 @@ export const ListRunsResponse = z.object({
     nextCursor: z.string().optional(),
 });
 
-export const CreateRunOptions = Run.pick({
-    agentId: true,
+export const CreateRunOptions = z.object({
+    agentId: z.string(),
+    model: z.string().optional(),
+    provider: z.string().optional(),
+    useCase: UseCase.optional(),
+    subUseCase: z.string().optional(),
 });

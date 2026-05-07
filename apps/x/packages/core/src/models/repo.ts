@@ -1,6 +1,5 @@
 import { ModelConfig } from "./models.js";
 import { WorkDir } from "../config/config.js";
-import { normalizeCodexModelConfig } from "./codex.js";
 import fs from "fs/promises";
 import path from "path";
 import z from "zod";
@@ -64,6 +63,7 @@ export class FSModelConfigRepo implements IModelConfigRepo {
     async getConfig(): Promise<z.infer<typeof ModelConfig>> {
         const raw = await this.loadRawConfig();
         const parsed = await this.parseConfigOrDefault(raw ?? defaultConfig);
+        const { normalizeCodexModelConfig } = await import("./codex.js");
         const normalized = await normalizeCodexModelConfig(parsed);
         if (normalized.changed) {
             await this.setConfig(normalized.config);
@@ -72,6 +72,7 @@ export class FSModelConfigRepo implements IModelConfigRepo {
     }
 
     async setConfig(config: z.infer<typeof ModelConfig>): Promise<void> {
+        const { normalizeCodexModelConfig } = await import("./codex.js");
         const normalized = await normalizeCodexModelConfig(config);
         config = normalized.config;
         const providerMode = config.providerMode;
@@ -92,6 +93,7 @@ export class FSModelConfigRepo implements IModelConfigRepo {
                 models: config.models,
                 knowledgeGraphModel: config.knowledgeGraphModel,
                 meetingNotesModel: config.meetingNotesModel,
+                trackBlockModel: config.trackBlockModel,
             };
             const toWrite = {
                 ...config,
@@ -109,6 +111,7 @@ export class FSModelConfigRepo implements IModelConfigRepo {
             knowledgeGraphModel: config.knowledgeGraphModel,
             meetingNotesModel: config.meetingNotesModel,
             providers: existingProviders,
+            trackBlockModel: config.trackBlockModel,
         };
         await fs.writeFile(this.configPath, JSON.stringify(toWrite, null, 2));
     }

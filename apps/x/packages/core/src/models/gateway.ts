@@ -1,13 +1,24 @@
 import { ProviderV2 } from '@ai-sdk/provider';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { getAccessToken } from '../auth/tokens.js';
 import { API_URL } from '../config/env.js';
 
-export async function getGatewayProvider(): Promise<ProviderV2> {
-    const accessToken = await getAccessToken();
+async function getRowboatAccessToken(): Promise<string> {
+    const { getAccessToken } = await import('../auth/tokens.js');
+    return getAccessToken();
+}
+
+const authedFetch: typeof fetch = async (input, init) => {
+    const token = await getRowboatAccessToken();
+    const headers = new Headers(init?.headers);
+    headers.set('Authorization', `Bearer ${token}`);
+    return fetch(input, { ...init, headers });
+};
+
+export function getGatewayProvider(): ProviderV2 {
     return createOpenRouter({
         baseURL: `${API_URL}/v1/llm`,
-        apiKey: accessToken,
+        apiKey: 'managed-by-rowboat',
+        fetch: authedFetch,
     });
 }
 
@@ -22,7 +33,7 @@ type ProviderSummary = {
 };
 
 export async function listGatewayModels(): Promise<{ providers: ProviderSummary[] }> {
-    const accessToken = await getAccessToken();
+    const accessToken = await getRowboatAccessToken();
     const response = await fetch(`${API_URL}/v1/llm/models`, {
         headers: { Authorization: `Bearer ${accessToken}` },
     });

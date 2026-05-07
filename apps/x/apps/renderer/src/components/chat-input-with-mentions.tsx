@@ -70,47 +70,14 @@ const providerDisplayNames: Record<string, string> = {
   'chatgpt-codex': 'ChatGPT / Codex',
 }
 
+type ProviderName = "openai" | "anthropic" | "google" | "openrouter" | "aigateway" | "ollama" | "openai-compatible" | "rowboat" | "chatgpt-codex"
+
 interface ConfiguredModel {
-  flavor: "openai" | "anthropic" | "google" | "openrouter" | "aigateway" | "ollama" | "openai-compatible" | "rowboat" | "chatgpt-codex"
+  provider: ProviderName
   model: string
-  apiKey?: string
-  baseURL?: string
-  headers?: Record<string, string>
-  knowledgeGraphModel?: string
-  meetingNotesModel?: string
 }
 
 type ProviderMode = 'byok' | 'rowboat' | 'chatgpt-codex'
-type AccountProviderMode = Exclude<ProviderMode, 'byok'>
-
-type AccountBackedConfig = {
-  providerMode: AccountProviderMode
-  model?: string
-  models?: string[]
-  knowledgeGraphModel?: string
-  meetingNotesModel?: string
-}
-
-type SaveConfigInvokePayload =
-  | {
-      providerMode: AccountProviderMode
-      model: string
-      models: string[]
-      knowledgeGraphModel?: string
-      meetingNotesModel?: string
-    }
-  | {
-      providerMode: 'byok'
-      provider: {
-        flavor: ConfiguredModel['flavor']
-        apiKey?: string
-        baseURL?: string
-        headers?: Record<string, string>
-      }
-      model: string
-      models: string[]
-      knowledgeGraphModel?: string
-    }
 
 function normalizeModelList(models: string[], primaryModel?: string): string[] {
   const normalized = models.map((model) => model.trim()).filter(Boolean)
@@ -120,26 +87,13 @@ function normalizeModelList(models: string[], primaryModel?: string): string[] {
   return [...new Set(ordered)]
 }
 
-function buildAccountBackedSavePayload(
-  config: AccountBackedConfig,
-  primaryModel: string,
-  fallbackModels: string[],
-) {
-  const models = normalizeModelList(
-    Array.isArray(config.models) && config.models.length > 0 ? config.models : fallbackModels,
-    primaryModel || config.model,
-  )
-  return {
-    providerMode: config.providerMode,
-    model: models[0] || primaryModel,
-    models,
-    knowledgeGraphModel: config.knowledgeGraphModel?.trim() || undefined,
-    meetingNotesModel: config.meetingNotesModel?.trim() || undefined,
-  }
+export interface SelectedModel {
+  provider: string
+  model: string
 }
 
-async function saveModelsConfig(payload: SaveConfigInvokePayload) {
-  await (window.ipc as any).invoke('models:saveConfig', payload)
+function getSelectedModelDisplayName(model: string) {
+  return model.split('/').pop() || model
 }
 
 function getAttachmentIcon(kind: AttachmentIconKind) {
@@ -184,6 +138,8 @@ interface ChatInputInnerProps {
   ttsMode?: 'summary' | 'full'
   onToggleTts?: () => void
   onTtsModeChange?: (mode: 'summary' | 'full') => void
+  /** Fired when the user picks a different model in the dropdown (only when no run exists yet). */
+  onSelectedModelChange?: (model: SelectedModel | null) => void
 }
 
 function ChatInputInner({
@@ -209,6 +165,7 @@ function ChatInputInner({
   ttsMode,
   onToggleTts,
   onTtsModeChange,
+  onSelectedModelChange,
 }: ChatInputInnerProps) {
   const controller = usePromptInputController()
   const message = controller.textInput.value
@@ -219,9 +176,26 @@ function ChatInputInner({
 
   const [configuredModels, setConfiguredModels] = useState<ConfiguredModel[]>([])
   const [activeModelKey, setActiveModelKey] = useState('')
+  const [lockedModel, setLockedModel] = useState<SelectedModel | null>(null)
   const [searchEnabled, setSearchEnabled] = useState(false)
   const [searchAvailable, setSearchAvailable] = useState(false)
   const [isRowboatConnected, setIsRowboatConnected] = useState(false)
+
+  // When a run exists, freeze the dropdown to the run's resolved model+provider.
+  useEffect(() => {
+    if (!runId) {
+      setLockedModel(null)
+      return
+    }
+    let cancelled = false
+    window.ipc.invoke('runs:fetch', { runId }).then((run) => {
+      if (cancelled) return
+      if (run.provider && run.model) {
+        setLockedModel({ provider: run.provider, model: run.model })
+      }
+    }).catch(() => { /* legacy run or fetch failure — leave unlocked */ })
+    return () => { cancelled = true }
+  }, [runId])
 
   // Check Rowboat sign-in state
   useEffect(() => {
@@ -240,7 +214,8 @@ function ChatInputInner({
     return cleanup
   }, [])
 
-  // Load model config (gateway when signed in, local config when BYOK)
+  // Load the list of models the user can choose from.
+  // Signed-in: gateway model list. Signed-out: providers configured in models.json.
   const loadModelConfig = useCallback(async () => {
     try {
       const result = await window.ipc.invoke('workspace:readFile', { path: 'config/models.json' })
@@ -257,10 +232,8 @@ function ChatInputInner({
           )
           models = (activeProvider?.models || []).map(
             (m: { id: string }) => ({
-              flavor: providerMode,
+              provider: providerMode,
               model: m.id,
-              knowledgeGraphModel: parsed?.knowledgeGraphModel || undefined,
-              meetingNotesModel: parsed?.meetingNotesModel || undefined,
             })
           )
           const configuredModelOrder = normalizeModelList(
@@ -285,10 +258,8 @@ function ChatInputInner({
         } catch {
           if (parsed?.model) {
             models = [{
-              flavor: providerMode,
+              provider: providerMode,
               model: parsed.model,
-              knowledgeGraphModel: parsed.knowledgeGraphModel || undefined,
-              meetingNotesModel: parsed.meetingNotesModel || undefined,
             }]
           }
         }
@@ -317,37 +288,17 @@ function ChatInputInner({
             const allModels = modelList.length > 0 ? modelList : singleModel ? [singleModel] : []
             for (const model of allModels) {
               if (model) {
-                models.push({
-                  flavor: flavor as ConfiguredModel['flavor'],
-                  model,
-                  apiKey: (e.apiKey as string) || undefined,
-                  baseURL: (e.baseURL as string) || undefined,
-                  headers: (e.headers as Record<string, string>) || undefined,
-                  knowledgeGraphModel: (e.knowledgeGraphModel as string) || undefined,
-                })
+                models.push({ provider: flavor as ProviderName, model })
               }
             }
           }
         }
-        const defaultKey = parsed?.provider?.flavor && parsed?.model
-          ? `${parsed.provider.flavor}/${parsed.model}`
-          : ''
-        models.sort((a, b) => {
-          const aKey = `${a.flavor}/${a.model}`
-          const bKey = `${b.flavor}/${b.model}`
-          if (aKey === defaultKey) return -1
-          if (bKey === defaultKey) return 1
-          return 0
-        })
         setConfiguredModels(models)
-        if (defaultKey) {
-          setActiveModelKey(defaultKey)
-        }
       }
     } catch {
       // No config yet
     }
-  }, [isRowboatConnected])
+  }, [])
 
   useEffect(() => {
     loadModelConfig()
@@ -378,52 +329,15 @@ function ChatInputInner({
     checkSearch()
   }, [isActive, isRowboatConnected])
 
-  const handleModelChange = useCallback(async (key: string) => {
-    const entry = configuredModels.find((m) => `${m.flavor}/${m.model}` === key)
+  // Selecting a model affects only the *next* run created from this tab.
+  // Once a run exists, model is frozen on the run and the dropdown is read-only.
+  const handleModelChange = useCallback((key: string) => {
+    if (lockedModel) return
+    const entry = configuredModels.find((m) => `${m.provider}/${m.model}` === key)
     if (!entry) return
     setActiveModelKey(key)
-
-    try {
-      if (entry.flavor === 'rowboat' || entry.flavor === 'chatgpt-codex') {
-        const result = await window.ipc.invoke('workspace:readFile', { path: 'config/models.json' })
-        const parsed = JSON.parse(result.data)
-        const accountConfig: AccountBackedConfig = {
-          providerMode: entry.flavor,
-          model: typeof parsed?.model === 'string' ? parsed.model : undefined,
-          models: Array.isArray(parsed?.models) ? parsed.models : undefined,
-          knowledgeGraphModel: typeof parsed?.knowledgeGraphModel === 'string'
-            ? parsed.knowledgeGraphModel
-            : entry.knowledgeGraphModel,
-          meetingNotesModel: typeof parsed?.meetingNotesModel === 'string'
-            ? parsed.meetingNotesModel
-            : entry.meetingNotesModel,
-        }
-        const fallbackModels = configuredModels
-          .filter((m) => m.flavor === entry.flavor)
-          .map((m) => m.model)
-        await saveModelsConfig(buildAccountBackedSavePayload(accountConfig, entry.model, fallbackModels))
-      } else {
-        // BYOK — preserve full provider config
-        const providerModels = configuredModels
-          .filter((m) => m.flavor === entry.flavor)
-          .map((m) => m.model)
-        await saveModelsConfig({
-          providerMode: 'byok',
-          provider: {
-            flavor: entry.flavor,
-            apiKey: entry.apiKey,
-            baseURL: entry.baseURL,
-            headers: entry.headers,
-          },
-          model: entry.model,
-          models: providerModels,
-          knowledgeGraphModel: entry.knowledgeGraphModel,
-        })
-      }
-    } catch {
-      toast.error('Failed to switch model')
-    }
-  }, [configuredModels])
+    onSelectedModelChange?.({ provider: entry.provider, model: entry.model })
+  }, [configuredModels, lockedModel, onSelectedModelChange])
 
   // Restore the tab draft when this input mounts.
   useEffect(() => {
@@ -661,7 +575,14 @@ function ChatInputInner({
           )
         )}
         <div className="flex-1" />
-        {configuredModels.length > 0 && (
+        {lockedModel ? (
+          <span
+            className="flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-xs text-muted-foreground"
+            title={`${providerDisplayNames[lockedModel.provider] || lockedModel.provider} — fixed for this chat`}
+          >
+            <span className="max-w-[150px] truncate">{getSelectedModelDisplayName(lockedModel.model)}</span>
+          </span>
+        ) : configuredModels.length > 0 ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -669,7 +590,7 @@ function ChatInputInner({
                 className="flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
                 <span className="max-w-[150px] truncate">
-                  {configuredModels.find((m) => `${m.flavor}/${m.model}` === activeModelKey)?.model || configuredModels[0]?.model || 'Model'}
+                  {getSelectedModelDisplayName(configuredModels.find((m) => `${m.provider}/${m.model}` === activeModelKey)?.model || configuredModels[0]?.model || 'Model')}
                 </span>
                 <ChevronDown className="h-3 w-3" />
               </button>
@@ -677,18 +598,18 @@ function ChatInputInner({
             <DropdownMenuContent align="end">
               <DropdownMenuRadioGroup value={activeModelKey} onValueChange={handleModelChange}>
                 {configuredModels.map((m) => {
-                  const key = `${m.flavor}/${m.model}`
+                  const key = `${m.provider}/${m.model}`
                   return (
                     <DropdownMenuRadioItem key={key} value={key}>
                       <span className="truncate">{m.model}</span>
-                      <span className="ml-2 text-xs text-muted-foreground">{providerDisplayNames[m.flavor] || m.flavor}</span>
+                      <span className="ml-2 text-xs text-muted-foreground">{providerDisplayNames[m.provider] || m.provider}</span>
                     </DropdownMenuRadioItem>
                   )
                 })}
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>
           </DropdownMenu>
-        )}
+        ) : null}
         {onToggleTts && ttsAvailable && (
           <div className="flex shrink-0 items-center">
             <Tooltip>
@@ -835,6 +756,7 @@ export interface ChatInputWithMentionsProps {
   ttsMode?: 'summary' | 'full'
   onToggleTts?: () => void
   onTtsModeChange?: (mode: 'summary' | 'full') => void
+  onSelectedModelChange?: (model: SelectedModel | null) => void
 }
 
 export function ChatInputWithMentions({
@@ -863,6 +785,7 @@ export function ChatInputWithMentions({
   ttsMode,
   onToggleTts,
   onTtsModeChange,
+  onSelectedModelChange,
 }: ChatInputWithMentionsProps) {
   return (
     <PromptInputProvider knowledgeFiles={knowledgeFiles} recentFiles={recentFiles} visibleFiles={visibleFiles}>
@@ -889,6 +812,7 @@ export function ChatInputWithMentions({
         ttsMode={ttsMode}
         onToggleTts={onToggleTts}
         onTtsModeChange={onTtsModeChange}
+        onSelectedModelChange={onSelectedModelChange}
       />
     </PromptInputProvider>
   )
